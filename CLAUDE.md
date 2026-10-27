@@ -48,6 +48,11 @@ A block returns one of four types:
 
 The registry exports the catalog as JSON, and the LLM prompt is generated from it. To add a concept, write the block, its registry entry and its test. The simulator never changes.
 
+**Where things live:**
+- Blocks are in `engine/blocks/`, grouped by family: `timing.py`, `levels.py`, `structure.py`, `series.py`.
+- Each block has a comment above it saying what it is, how strategies use it, and its lookahead rule.
+- Every block also needs a `CASES` entry in `engine/tests/test_truncation.py` (`test_every_block_has_a_case` enforces this) and hand-built cases in `engine/tests/test_blocks.py`.
+
 **Must-have blocks:**
 - **Time:** sessions/killzones, day of week, time windows.
 - **Levels:** prior day/week high/low, Asia/London high/low, NY midnight open, opening range, equal highs/lows.
