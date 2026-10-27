@@ -139,6 +139,20 @@ def interpret(spec: Strategy, bars: Bars) -> Signals:
     return out.take(keep) if not keep.all() else out
 
 
+def filter_mask(spec: Strategy, bars: Bars) -> np.ndarray:
+    """Bars where all the spec's filters hold (True everywhere without filters).
+
+    The random baseline draws its entry bars from here, so it trades the same sessions and
+    conditions as the strategy and differs only in the setup.
+    """
+    spec = canonicalize(spec)
+    ev = _Evaluator(bars)
+    mask = np.ones(len(bars), bool)
+    for c in spec.filters:
+        mask &= ev.condition(c)
+    return mask
+
+
 def chain(within: list[int | None], events: list[np.ndarray]) -> list[np.ndarray]:
     """Bars where the sequence completes, as one array per step.
 

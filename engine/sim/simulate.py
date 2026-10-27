@@ -53,9 +53,13 @@ def m1_ranges(bars: Bars, m1: Bars) -> tuple[np.ndarray, np.ndarray]:
     return start.astype(np.int64), end.astype(np.int64)
 
 
-def run_kernel(signals: Signals, bars: Bars, m1: Bars, costs: Costs, spread: np.ndarray | None = None):
-    """Raw kernel outputs for the signals, in signal order. The baseline calls this in a batch."""
-    start, end = m1_ranges(bars, m1)
+def run_kernel(signals: Signals, bars: Bars, m1: Bars, costs: Costs, spread: np.ndarray | None = None,
+               ranges: tuple[np.ndarray, np.ndarray] | None = None):
+    """Raw kernel outputs for the signals, in signal order.
+
+    The baseline calls this in a batch and passes precomputed `spread` and `ranges`.
+    """
+    start, end = ranges if ranges is not None else m1_ranges(bars, m1)
     if spread is None:
         spread = costs.spread_per_bar(m1.open_minute_ny)
     return kernel.scan(
