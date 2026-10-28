@@ -1,9 +1,9 @@
 """Time blocks: sessions/killzones and day of week. All times are New York wall-clock."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 import numpy as np
-from pydantic import model_validator
+from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from engine.blocks.context import Bars
 from engine.blocks.registry import Params, block
@@ -26,6 +26,23 @@ def to_minute(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _hhmm(value: str) -> str:
+    m = to_minute(value)
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+TimeOfDay = Annotated[str, AfterValidator(_hhmm)]  # "9:30" is stored as "09:30", so both hash the same
+
+
+def check_on_grid(start: str, end: str, tf_minutes: int) -> None:
+    """Window edges must fall on bar boundaries. Otherwise one bar straddles the edge and the
+    window silently includes minutes outside it (09:30-09:50 on 15m bars would run to 10:00)."""
+    for t in (start, end):
+        if to_minute(t) % tf_minutes:
+            raise ValueError(f"window edge {t} isn't on the {tf_minutes}m bar grid; "
+                             f"use times that are a multiple of {tf_minutes} minutes")
+
+
 def in_window(minutes: np.ndarray, start: str, end: str) -> np.ndarray:
     """minutes in [start, end), wrapping past midnight when end <= start."""
     s, e = to_minute(start), to_minute(end)
@@ -38,8 +55,11 @@ def window_bounds(session: str, start: str | None, end: str | None) -> tuple[str
 
 class TimeWindowParams(Params):
     session: Session | Literal["custom"] = "ny_am"
-    start: str | None = None  # HH:MM NY, custom only
-    end: str | None = None
+    start: TimeOfDay | None = None  # HH:MM NY, custom only
+    end: TimeOfDay | None = None
+
+    def check_timeframe(self, tf_minutes: int) -> None:
+        check_on_grid(*window_bounds(self.session, self.start, self.end), tf_minutes)
 
     @model_validator(mode="after")
     def _custom_needs_times(self):
@@ -73,7 +93,12 @@ WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
 class DayOfWeekParams(Params):
-    days: tuple[Weekday, ...] = ("mon", "tue", "wed", "thu", "fri")
+    days: tuple[Weekday, ...] = Field(("mon", "tue", "wed", "thu", "fri"), min_length=1)
+
+    @field_validator("days")
+    @classmethod
+    def _in_week_order(cls, days):  # the same days in any order are the same filter, and the same hash
+        return tuple(sorted(set(days), key=WEEKDAYS.index))
 
 
 # Day-of-week filter. True on bars whose trading day is one of the listed weekdays.

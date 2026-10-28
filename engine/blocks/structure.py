@@ -83,7 +83,8 @@ def _zone_ends(high, low, created, top, bottom, direction, max_age) -> np.ndarra
 # Use it as a setup step ("then a bullish FVG forms within 10 bars") and enter at its edge
 # (`top`/`bottom`, e.g. a limit at gap.top), with the stop beyond the far edge.
 # The zone stays active until price trades through its far edge or `max_age` bars pass.
-# No lookahead: the gap is known at candle 3's close, the bar it's stamped on.
+# No lookahead: the gap is known at candle 3's close, the bar it's stamped on. The size filter
+# uses ATR as of candle 2, so candle 3 doesn't inflate its own yardstick (same as displacement).
 @block(
     "fvg",
     params=FvgParams,
@@ -108,7 +109,7 @@ def fvg(bars: Bars, p: FvgParams) -> dict:
     top = np.where(bull, l, lag(l, 2))
     bottom = np.where(bull, lag(h, 2), h)
     if p.min_size_atr > 0:
-        want &= (top - bottom) >= p.min_size_atr * atr_values(bars, 14)
+        want &= (top - bottom) >= p.min_size_atr * lag(atr_values(bars, 14), 1)
 
     created = np.flatnonzero(want)
     z_top, z_bottom, z_dir = top[created], bottom[created], np.where(bull[created], 1, -1)
@@ -131,7 +132,8 @@ class SweepParams(Params):
 # `extreme` (the sweep's lowest low / highest high) is the natural stop reference.
 # Turtle Soup, spring, stop run and liquidity grab are all this block.
 # No lookahead: compares against the level as it was on the previous bar, so a bar can't
-# sweep a level it set itself.
+# sweep a level it set itself. Known gap: a prior day/week level appears on the first bar of the
+# new day/week, so that one bar is judged against the older level (18:00 NY, outside every killzone).
 @block(
     "sweep",
     params=SweepParams,
