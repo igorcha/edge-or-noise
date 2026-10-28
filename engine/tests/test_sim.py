@@ -132,13 +132,13 @@ def test_spread_slippage_and_commission():
     m1, tf = m1_bars(ROWS)
     costs = Costs(spread_rth=0.3, spread_overnight=1.0, commission=0.05, slippage=0.1)
     t = one(simulate(sig(stop_dist=2.0, target_r=2.0), tf, m1, costs))
-    assert t.entry == pytest.approx(100.4)  # bid open 100 + RTH spread + slippage
-    assert t.stop == pytest.approx(98.4) and t.target == pytest.approx(104.4)
-    assert t.exit_reason == "end"  # 104.2 no longer reaches the target
-    exit_px = 100 - 0.1  # last close minus slippage
-    assert t.exit == pytest.approx(exit_px)
-    assert t.R == pytest.approx((exit_px - 100.4) / 2 - 0.1 / 2)
-    assert t.cost_R == pytest.approx((0.3 + 0.1 + 0.1 + 0.1) / 2)
+    assert (t.entry, t.stop, t.target) == (100, 98, 104)  # chart prices; the spread is a cost, not a worse fill
+    assert t.exit_reason == "target" and t.exit == 104
+    assert t.cost_R == pytest.approx((0.3 + 0.1 + 2 * 0.05) / 2)  # entry spread + entry slippage + commissions
+    assert t.R == pytest.approx(2 - t.cost_R)
+    m1, tf = m1_bars([FLAT] * 20)
+    t = one(simulate(sig(stop_dist=2.0, max_bars_held=1), tf, m1, costs))  # time exit: a market sell, slippage only
+    assert t.exit_reason == "time" and t.cost_R == pytest.approx((0.3 + 0.1 + 0.1 + 2 * 0.05) / 2)
 
 
 def test_scaled_costs_lower_r():
@@ -152,7 +152,7 @@ def test_scaled_costs_lower_r():
 def test_overnight_spread_outside_rth():
     costs = Costs(spread_rth=0.3, spread_overnight=1.0)
     m1, tf = m1_bars([FLAT] * 15, start_ny="2026-03-10 03:00")
-    assert one(simulate(sig(stop_dist=2.0), tf, m1, costs)).entry == pytest.approx(101.0)
+    assert one(simulate(sig(stop_dist=2.0), tf, m1, costs)).cost_R == pytest.approx(1.0 / 2)
 
 
 # --- shorts ----------------------------------------------------------------------------------
@@ -164,8 +164,12 @@ def test_short_mirror_with_spread_on_the_cover():
     t = one(simulate(sig(direction=-1, stop_dist=1.0, target_r=2.0), tf, m1, costs))
     assert t.entry == 100 and t.stop == 101 and t.target == 98  # sold at the bid, no spread on the way in
     assert t.exit_reason == "target" and t.exit == 98 and t.exit_m1 == 7  # ask low = 96.9 + 0.1 <= 97.99
-    assert t.R == 2 and t.cost_R == pytest.approx(0.1 / 1.0)
+    assert t.R == 2 and t.cost_R == 0  # the spread's price was waiting for the ask to reach the target
     assert t.mae_R == pytest.approx(0.6) and t.mfe_R == pytest.approx(3.0)  # ask high 100.6 on the fill bar
+    costs = Costs(0.1, 0.1, slippage=0.05)
+    m1, tf = m1_bars([FLAT] * 20)
+    t = one(simulate(sig(direction=-1, stop_dist=1.0, max_bars_held=1), tf, m1, costs))  # time exit: cover at market
+    assert t.exit_reason == "time" and t.cost_R == pytest.approx(0.05 + 0.1 + 0.05)  # entry slip, cover spread + slip
 
 
 def test_short_stop_uses_the_ask():

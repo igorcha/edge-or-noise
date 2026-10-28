@@ -12,9 +12,15 @@ One position (or one working order) at a time. For each signal, in bar order:
   4. an optional time stop closes at the open after `max_bars_held` strategy bars;
      a position still open at the end of data is closed at the last close ("end")
 
-Prices: bars are bid. Buying (long entry, short exit) pays bid + spread of that 1m bar.
-Market fills (market entries, stop exits, time/end exits) also pay slippage.
-Limit fills (limit entries, targets) pay neither slippage nor trade-through.
+Prices and costs: bars are bid, and every price in the trade log is a chart (bid) price.
+  R = signed(exit - entry) / risk - cost_R, with risk = |entry - stop| on those prices.
+  cost_R charges, in R: the spread on market buys (a long's market entry, a short's
+  time/end exit), slippage on every market fill (market entries, stops, time/end exits),
+  and commission per side.
+  Limit orders and stops are checked on the trader's side of the book instead, so their
+  cost is a fill that comes later or not at all, never a charge: a buy limit needs the ask
+  (bid + spread) to trade through, a short's stop triggers on the ask, a short's target
+  needs the ask to reach it.
 
 Everything that isn't a plain loop over arrays lives in simulate.py; this module must stay
 numba-compilable and free of Python objects.
@@ -92,11 +98,9 @@ def scan(sig_bar, sig_entry, sig_stop_px, sig_stop_dist, sig_target_px, target_r
         slip_paid = 0.0
         if not is_limit:
             fi = first
+            fill = o[fi]  # bid open; a buy's spread and the slippage are charged as costs
             if d > 0:
-                fill = o[fi] + spread[fi] + slippage
                 spread_paid = spread[fi]
-            else:
-                fill = o[fi] - slippage
             slip_paid = slippage
         else:
             lim = sig_entry[s]
@@ -168,10 +172,8 @@ def scan(sig_bar, sig_entry, sig_stop_px, sig_stop_dist, sig_target_px, target_r
             if i >= time_stop_i and i > fi:
                 why = TIME
                 ei = i
-                if d > 0:
-                    ex = o[i] - slippage
-                else:
-                    ex = o[i] + spread[i] + slippage
+                ex = o[i]  # bid open; a short's cover pays the spread, both pay slippage, as costs
+                if d < 0:
                     exit_spread = spread[i]
                 exit_slip = slippage
                 break
@@ -211,21 +213,12 @@ def scan(sig_bar, sig_entry, sig_stop_px, sig_stop_dist, sig_target_px, target_r
                 ex = tgt
                 break
         if why == STOP:
-            if d > 0:
-                ex = ex - slippage
-            else:
-                ex = ex + slippage
-                exit_spread = spread[ei]
-            exit_slip = slippage
-        elif why == TARGET and d < 0:
-            exit_spread = spread[ei]  # a short covers at the ask: the target is reached a spread later
+            exit_slip = slippage  # a triggered stop is a market order
         if why < 0:  # still open at the end of data
             why = END
             ei = n_m1 - 1
-            if d > 0:
-                ex = c[ei] - slippage
-            else:
-                ex = c[ei] + spread[ei] + slippage
+            ex = c[ei]
+            if d < 0:
                 exit_spread = spread[ei]
             exit_slip = slippage
 
@@ -243,7 +236,7 @@ def scan(sig_bar, sig_entry, sig_stop_px, sig_stop_dist, sig_target_px, target_r
         target_px[s] = tgt
         reason[s] = why
         cost_r[s] = (spread_paid + exit_spread + slip_paid + exit_slip + 2.0 * commission) / risk
-        r[s] = (ex - fill) * d / risk - 2.0 * commission / risk
+        r[s] = (ex - fill) * d / risk - cost_r[s]
         mae[s] = worst / risk
         mfe[s] = best / risk
         bars_held[s] = tf_e - fill_tf
