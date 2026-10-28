@@ -36,7 +36,7 @@ def sig(bar=0, direction=1, entry=NAN, stop=NAN, stop_dist=NAN, target=NAN, targ
     return Signals(bar=bar, direction=direction, entry_kind="limit" if not np.isnan(entry) else "market",
                    entry_price=arr(entry), expiry_bars=expiry, stop_price=arr(stop), stop_distance=arr(stop_dist),
                    target_price=arr(target), target_r=target_r, max_bars_held=max_bars_held, max_trades_per_day=cap,
-                   slippage_ticks=0, price_step=TICK, **kw)
+                   slippage_pts=0.0, price_step=TICK, **kw)
 
 
 FLAT = (100, 100.5, 99.5, 100)
@@ -246,7 +246,7 @@ def test_examples_end_to_end(data, name):
     spec = validate_spec({**EXAMPLES[name], "timeframe": "5m"})
     res = simulate(interpret(spec, tf), tf, m1, Costs(0.5, 1.0, commission=0.0, slippage=0.0))
     t = res.trades
-    assert (t.entry_time > t.signal_time).all() and (t.exit_time > t.entry_time).all()
+    assert (t.entry_time >= t.signal_time).all() and (t.exit_time > t.entry_time).all()  # market fills at the next open = signal close
     assert (t.entry_bar > t.signal_bar).all() and (t.exit_bar >= t.entry_bar).all()
     assert (t.exit_m1 >= t.entry_m1).all()
     assert (t.exit_m1.to_numpy()[:-1] < t.entry_m1.to_numpy()[1:]).all(), "positions overlap"

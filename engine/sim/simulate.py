@@ -107,5 +107,5 @@ def warm() -> None:
     sig = Signals(bar=np.array([0]), direction=1, entry_kind="market", entry_price=np.array([np.nan]),
                   expiry_bars=0, stop_price=np.array([np.nan]), stop_distance=np.array([5.0]),
                   target_price=np.array([np.nan]), target_r=2.0, max_bars_held=0, max_trades_per_day=1,
-                  slippage_ticks=0, price_step=0.01)
+                  slippage_pts=0.0, price_step=0.01)
     simulate(sig, tf, m1, Costs(0.0, 0.0))
