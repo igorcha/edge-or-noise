@@ -41,8 +41,8 @@ Each block has:
 - a truncation lookahead test
 
 A block returns one of four types:
-- **series:** a number per bar
-- **level:** a price per bar
+- **series:** a number per bar that isn't a price (ATR in points, RSI)
+- **level:** a price per bar (prior day high, swing low, EMA)
 - **event:** a bool per bar
 - **zone:** a price range with a lifetime
 
@@ -69,13 +69,16 @@ The spec is a set of Pydantic models with JSON schema export. Its sections are d
 
 It supports:
 - all/any/not filters
+- comparisons (`>`, `<`, `>=`, `<=`) and crosses (`crosses_above`, `crosses_below`), prices with prices and numbers with numbers. A cross is an event, so it can be a setup step.
 - "A then B within N bars"
 - persistent state ("since")
 - references to setup geometry (`gap.top`)
 - entry expiry
 - multi-timeframe evaluation, joined on close time
 
-**Pipeline:** JSON schema → semantic checks → canonicalize (fill defaults, sort keys) → SHA-256 hash. The hash is the trial's identity.
+**Pipeline:** JSON schema → semantic checks → canonicalize (fill defaults, resolve aliases, flatten and sort filters, sort keys) → SHA-256 hash of the canonical JSON plus `ENGINE_VERSION` (`engine/__init__.py`). The hash is the trial's identity. Bump `ENGINE_VERSION` whenever a block, interpreter or simulator change alters results for an unchanged spec.
+
+**Units:** distances in the spec (slippage, stop buffer, limit offset, fixed stops) are price points, never ticks. A US100 tick is 0.01 points.
 
 ## Engine rules (non-negotiable)
 

@@ -1,7 +1,7 @@
 """Example specs: the demo strategy, and material for tests and LLM few-shots."""
 
 # The canonical ICT demo: NY AM killzone, sweep of the Asia low, then a bullish FVG within
-# 10 bars; limit at the gap top, stop under the last swing low, 2R target, one trade a day.
+# 10 bars; limit at the gap top, stop 2 points under the last swing low, 2R target, one trade a day.
 FVG_LONG = {
     "instrument": "US100",
     "timeframe": "5m",
@@ -26,7 +26,7 @@ FVG_LONG = {
         },
     ],
     "entry": {"type": "limit", "at": {"ref": "gap.top"}, "expiry_bars": 20},
-    "stop": {"type": "level", "at": {"block": "swing", "output": "low"}, "buffer_ticks": 10},
+    "stop": {"type": "level", "at": {"block": "swing", "output": "low"}, "buffer_pts": 2},
     "target": {"type": "r_multiple", "r": 2},
     "limits": {"max_trades_per_day": 1},
 }
@@ -51,7 +51,47 @@ DISPLACEMENT_SHORT = {
     "stop": {"type": "atr", "multiple": 1.5},
     "target": {"type": "level", "at": {"block": "window_high_low", "params": {"window": "day"}, "output": "low"}},
     "limits": {"max_trades_per_day": 2, "max_bars_held": 40},
-    "slippage_ticks": 2,
+    "slippage_pts": 0.5,
 }
 
-EXAMPLES = {"fvg_long": FVG_LONG, "displacement_short": DISPLACEMENT_SHORT}
+# A cross as the setup: long when the 9 EMA crosses above the 21 EMA in NY hours, 30 point stop, 2R.
+EMA_CROSS_LONG = {
+    "instrument": "US100",
+    "timeframe": "15m",
+    "direction": "long",
+    "filters": [
+        {"any": [
+            {"event": {"block": "time_window", "params": {"session": "ny_am"}}},
+            {"event": {"block": "time_window", "params": {"session": "ny_pm"}}},
+        ]},
+    ],
+    "setup": [
+        {"name": "cross", "event": {"left": {"block": "ema", "params": {"length": 9}}, "op": "crosses_above",
+                                    "right": {"block": "ema", "params": {"length": 21}}}},
+    ],
+    "entry": {"type": "market"},
+    "stop": {"type": "points", "points": 30},
+    "target": {"type": "r_multiple", "r": 2},
+}
+
+# Opening range breakout: once the 09:30-10:00 range is complete, long when a candle closes above
+# its high within 2 hours; stop at the range low, 1.5R.
+OPENING_RANGE_LONG = {
+    "instrument": "US100",
+    "timeframe": "5m",
+    "direction": "long",
+    "setup": [
+        {"name": "range", "event": {"block": "window_high_low", "output": "updated",
+                                    "params": {"window": "custom", "start": "09:30", "end": "10:00"}}},
+        {"name": "breakout", "within": 24,
+         "event": {"left": {"price": "close"}, "op": "crosses_above",
+                   "right": {"block": "window_high_low", "output": "high",
+                             "params": {"window": "custom", "start": "09:30", "end": "10:00"}}}},
+    ],
+    "entry": {"type": "market"},
+    "stop": {"type": "level", "at": {"ref": "range.low"}},
+    "target": {"type": "r_multiple", "r": 1.5},
+}
+
+EXAMPLES = {"fvg_long": FVG_LONG, "displacement_short": DISPLACEMENT_SHORT, "ema_cross_long": EMA_CROSS_LONG,
+            "opening_range_long": OPENING_RANGE_LONG}
