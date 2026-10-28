@@ -1,4 +1,4 @@
-"""Series blocks: indicators that give a number per bar."""
+"""Indicator blocks: moving averages (a price, so a level) and volatility (a series, in points)."""
 
 from typing import Literal
 
@@ -8,7 +8,7 @@ from pydantic import Field
 
 from engine.blocks.context import Bars
 from engine.blocks.registry import Params, block
-from engine.blocks.types import SERIES
+from engine.blocks.types import LEVEL, SERIES
 
 
 def atr_values(bars: Bars, length: int) -> np.ndarray:
@@ -25,12 +25,13 @@ class EmaParams(Params):
 
 # Exponential moving average of a price.
 # Use it as a trend filter ("only longs while close is above the 50 EMA"), a cross event
-# ("EMA 9 crosses EMA 21"), or a dynamic level for entries and stops.
+# ("EMA 9 crosses EMA 21"), or a dynamic level for entries and stops. Its output is a level
+# (a price), so it can be compared with prices; ATR is a series (points), so it can't.
 # No lookahead: computed recursively from past bars only; NaN until `length` bars exist.
 @block(
     "ema",
     params=EmaParams,
-    outputs={"value": SERIES},
+    outputs={"value": LEVEL},
     aliases=("exponential moving average", "moving average", "ma"),
     description="Exponential moving average of the chosen price (default close).",
 )

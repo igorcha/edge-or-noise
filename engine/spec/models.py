@@ -4,6 +4,9 @@ A spec is JSON the LLM produces and the interpreter runs. Sections: instrument/t
 (fixed per project), direction, filters, setup, entry, stop, target, limits, slippage.
 Every model forbids unknown keys so a typo can't silently become a default.
 
+Distances (slippage, stop buffer, limit offset, fixed stops) are in price points, never ticks:
+a US100 tick is 0.01 points, so "a 20 tick stop" would mean 0.2 points.
+
 Blocks are referenced by name (or alias) with their params; `models.py` only checks shape.
 Whether a block exists, its params are valid and an output has the right kind is checked
 against the registry in `checks.py`, which also fills defaults so two specs that mean the
@@ -13,9 +16,9 @@ MVP cuts (roadmap): `manage` (break-even/trailing), `since` state, multi-timefra
 entries, direction "both" (run two trials instead).
 """
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
 from engine.data.instruments import INSTRUMENTS, TIMEFRAMES
 
@@ -23,6 +26,7 @@ Instrument = Literal[tuple(sorted(INSTRUMENTS))]  # type: ignore[valid-type]
 Timeframe = Literal[tuple(sorted(TIMEFRAMES, key=TIMEFRAMES.get))]  # type: ignore[valid-type]
 Direction = Literal["long", "short"]
 Name = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$")]
+Points = Annotated[float, Field(ge=0, le=10_000)]  # a distance in price points
 
 
 class SpecModel(BaseModel):
@@ -69,12 +73,19 @@ class Price(SpecModel):
     price: Literal["open", "high", "low", "close"]
 
 
-Operand = float | Price | BlockRef  # a number, a bar price, or a series/level output
+Operand = float | Price | BlockRef  # a constant, a bar price, or a level (price) / series (number) output
+CROSS_OPS = ("crosses_above", "crosses_below")
 
 
 class Compare(SpecModel):
+    """`left op right` on each bar. Both sides must be prices (bar prices, levels) or both numbers
+    (series); a constant fits either.
+
+    `crosses_above`: left > right on this bar and left <= right on the previous one, both closed
+    bars. `crosses_below` mirrors it. A cross is an event, so it can also be a setup step
+    ("EMA 9 crosses above EMA 21", "close crosses above the opening range high")."""
     left: Operand
-    op: Literal[">", "<", ">=", "<="]
+    op: Literal[">", "<", ">=", "<=", "crosses_above", "crosses_below"]
     right: Operand
 
 
@@ -94,16 +105,33 @@ class Not(SpecModel):
     not_: "Condition" = Field(alias="not")
 
 
-Condition = Event | Compare | All | AnyOf | Not
+def _condition_tag(v: Any) -> str | None:
+    """Which kind of condition this is, from its keys, so a malformed one gets one precise error
+    instead of an error for every kind it might have been."""
+    if isinstance(v, dict):
+        return next((tag for key, tag in (("event", "event"), ("left", "compare"), ("all", "all"),
+                                          ("any", "any"), ("not", "not")) if key in v), None)
+    return {Event: "event", Compare: "compare", All: "all", AnyOf: "any", Not: "not"}.get(type(v))
+
+
+Condition = Annotated[
+    Union[Annotated[Event, Tag("event")], Annotated[Compare, Tag("compare")], Annotated[All, Tag("all")],
+          Annotated[AnyOf, Tag("any")], Annotated[Not, Tag("not")]],
+    Discriminator(_condition_tag, custom_error_type="condition",
+                  custom_error_message="a condition is one of {event}, {left, op, right}, {all: [...]}, "
+                                       "{any: [...]}, {not: ...}"),
+]
 
 
 # --- setup ----------------------------------------------------------------------------------
 
 class Step(SpecModel):
     """One event in the setup sequence. "A then B within N bars": B's `within` counts bars
-    after A's bar (1 = the very next bar). The first step has no `within`."""
+    after A's bar (1 = the very next bar). The first step has no `within`.
+
+    `event` is a block's event output, or a cross (a Compare with crosses_above/crosses_below)."""
     name: Name
-    event: BlockRef
+    event: BlockRef | Compare
     within: Annotated[int, Field(ge=1, le=500)] | None = None
 
 
@@ -116,19 +144,19 @@ class MarketEntry(SpecModel):
 class LimitEntry(SpecModel):
     type: Literal["limit"]
     at: PriceRef
-    offset_ticks: Annotated[int, Field(ge=-1000, le=1000)] = 0  # +ticks = above the level
+    offset_pts: Annotated[float, Field(ge=-10_000, le=10_000)] = 0.0  # + = above the level
     expiry_bars: Annotated[int, Field(ge=1, le=500)] = 20  # cancel if not filled in time
 
 
-Entry = MarketEntry | LimitEntry
+Entry = Annotated[MarketEntry | LimitEntry, Field(discriminator="type")]
 
 
 class LevelStop(SpecModel):
-    """Stop at a level: a swing, a zone edge ("gap.bottom"), the sweep extreme. `buffer_ticks`
+    """Stop at a level: a swing, a zone edge ("gap.bottom"), the sweep extreme. `buffer_pts`
     pushes it further from the entry."""
     type: Literal["level"]
     at: PriceRef
-    buffer_ticks: Annotated[int, Field(ge=0, le=1000)] = 0
+    buffer_pts: Points = 0.0
 
 
 class AtrStop(SpecModel):
@@ -137,12 +165,12 @@ class AtrStop(SpecModel):
     length: Annotated[int, Field(ge=2, le=500)] = 14
 
 
-class TicksStop(SpecModel):
-    type: Literal["ticks"]
-    ticks: Annotated[int, Field(ge=1, le=100_000)]
+class PointsStop(SpecModel):
+    type: Literal["points"]
+    points: Annotated[float, Field(gt=0, le=10_000)]  # fixed distance from the entry
 
 
-Stop = LevelStop | AtrStop | TicksStop
+Stop = Annotated[LevelStop | AtrStop | PointsStop, Field(discriminator="type")]
 
 
 class RTarget(SpecModel):
@@ -155,7 +183,7 @@ class LevelTarget(SpecModel):
     at: PriceRef
 
 
-Target = RTarget | LevelTarget
+Target = Annotated[RTarget | LevelTarget, Field(discriminator="type")]
 
 
 class Limits(SpecModel):
@@ -173,11 +201,11 @@ class Strategy(SpecModel):
     direction: Direction
     filters: list[Condition] = []  # all must hold on the signal bar (an implicit `all`)
     setup: list[Step] = Field(min_length=1, max_length=8)
-    entry: Entry = MarketEntry()
+    entry: Entry  # required: market vs a limit at the gap changes results too much to assume
     stop: Stop
     target: Target
     limits: Limits = Limits()
-    slippage_ticks: Annotated[int, Field(ge=0, le=1000)] = 0  # per side, on top of the spread
+    slippage_pts: Annotated[float, Field(ge=0, le=1000)] = 0.0  # per side, on top of the spread
 
     @model_validator(mode="after")
     def _steps(self):
