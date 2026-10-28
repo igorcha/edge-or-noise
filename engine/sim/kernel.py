@@ -12,15 +12,16 @@ One position (or one working order) at a time. For each signal, in bar order:
   4. an optional time stop closes at the open after `max_bars_held` strategy bars;
      a position still open at the end of data is closed at the last close ("end")
 
-Prices and costs: bars are bid, and every price in the trade log is a chart (bid) price.
+Prices and costs: bars are bid. Market fills are logged at the bid open and their spread is a
+  charge; limit, stop and target fills are logged at the order's own price.
   R = signed(exit - entry) / risk - cost_R, with risk = |entry - stop| on those prices.
   cost_R charges, in R: the spread on market buys (a long's market entry, a short's
   time/end exit), slippage on every market fill (market entries, stops, time/end exits),
   and commission per side.
   Limit orders and stops are checked on the trader's side of the book instead, so their
   cost is a fill that comes later or not at all, never a charge: a buy limit needs the ask
-  (bid + spread) to trade through, a short's stop triggers on the ask, a short's target
-  needs the ask to reach it.
+  (bid + spread) to trade through and then pays its limit price (or the ask open on a gap),
+  a short's stop triggers on the ask, a short's target needs the ask to reach it.
 
 Everything that isn't a plain loop over arrays lives in simulate.py; this module must stay
 numba-compilable and free of Python objects.
@@ -109,14 +110,12 @@ def scan(sig_bar, sig_entry, sig_stop_px, sig_stop_dist, sig_target_px, target_r
             for i in range(first, stop_i):
                 if d > 0:
                     ask_open = o[i] + spread[i]
-                    if ask_open <= lim:
+                    if ask_open <= lim:  # already an ask price: the spread is in the fill, not a charge
                         fill = ask_open
-                        spread_paid = spread[i]
                         fi = i
                         break
                     if l[i] + spread[i] <= lim - tick:
                         fill = lim
-                        spread_paid = spread[i]
                         fi = i
                         break
                 else:
