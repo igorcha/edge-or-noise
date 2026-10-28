@@ -7,7 +7,8 @@ import re
 import pytest
 
 from engine.spec import SpecError, Strategy, canonical_dict, canonical_json, json_schema, spec_hash, validate_spec
-from engine.spec.examples import DISPLACEMENT_SHORT, EXAMPLES, FVG_LONG
+from engine.spec import hashing
+from engine.spec.examples import DISPLACEMENT_SHORT, EMA_CROSS_LONG, EXAMPLES, FVG_LONG, OPENING_RANGE_LONG
 
 
 def h(data: dict) -> str:
@@ -47,8 +48,8 @@ def test_canonical_form_fills_defaults_and_names():
     assert gap == {"block": "fvg", "params": {"direction": "bullish", "min_size_atr": 0.0, "max_age": 100},
                    "inputs": {}, "output": "formed"}
     assert canon["filters"][0]["event"]["output"] == "value"  # single output named explicitly
-    assert canon["entry"]["offset_ticks"] == 0 and canon["limits"]["max_bars_held"] is None
-    assert canon["slippage_ticks"] == 0 and canon["version"] == 1
+    assert canon["entry"]["offset_pts"] == 0 and canon["limits"]["max_bars_held"] is None
+    assert canon["slippage_pts"] == 0 and canon["version"] == 1
 
 
 # --- hash identity: what is and isn't a new trial ---------------------------------------
@@ -61,8 +62,8 @@ def test_hash_ignores_key_order_and_whitespace():
 
 def test_hash_ignores_spelled_out_defaults():
     explicit = edited(FVG_LONG, "setup.1.event.params", {"direction": "bullish", "min_size_atr": 0, "max_age": 100})
-    explicit = edited(explicit, "entry.offset_ticks", 0)
-    explicit["slippage_ticks"] = 0
+    explicit = edited(explicit, "entry.offset_pts", 0)
+    explicit["slippage_pts"] = 0
     explicit["limits"] = {"max_trades_per_day": 1, "max_bars_held": None}
     explicit["entry"]["type"] = "limit"
     assert h(explicit) == h(FVG_LONG)
@@ -82,14 +83,14 @@ def test_hash_ignores_int_vs_float():
 @pytest.mark.parametrize("path,value", [
     ("setup.1.event.params.max_age", 50),
     ("setup.1.within", 12),
-    ("stop.buffer_ticks", 0),
+    ("stop.buffer_pts", 0),
     ("stop", {"type": "level", "at": {"ref": "sweep.extreme"}}),
     ("target.r", 2.5),
     ("entry.expiry_bars", 10),
     ("entry", {"type": "market"}),
     ("direction", "short"),
     ("timeframe", "15m"),
-    ("slippage_ticks", 1),
+    ("slippage_pts", 0.25),
     ("limits.max_trades_per_day", 2),
     ("filters", []),
     ("filters.0.event.params.session", "ny_pm"),
@@ -147,6 +148,9 @@ def test_semantic_errors(path, value, where, words):
     (lambda d: d.update(entry={"type": "limit", "at": {"ref": "gap top"}}), "ref"),
     (lambda d: d["filters"].append({"not": {"all": []}}), "all"),
     (lambda d: d.pop("stop"), "stop"),
+    (lambda d: d.pop("entry"), "entry"),  # a missing entry is a question for the user, never assumed
+    (lambda d: d["stop"].update(buffer_ticks=10), "buffer_ticks"),  # distances are in points
+    (lambda d: d.update(stop={"type": "ticks", "ticks": 20}), "stop"),
 ])
 def test_shape_errors(mutate, words):
     data = copy.deepcopy(FVG_LONG)
@@ -161,5 +165,117 @@ def test_shape_errors(mutate, words):
 def test_json_schema_exports():
     schema = json_schema()
     json.dumps(schema)
-    assert set(schema["required"]) == {"instrument", "timeframe", "direction", "setup", "stop", "target"}
+    assert set(schema["required"]) == {"instrument", "timeframe", "direction", "setup", "entry", "stop", "target"}
     assert "US100" in json.dumps(schema["properties"]["instrument"])
+
+
+# --- crosses ------------------------------------------------------------------------------------
+
+def test_cross_examples_canonicalize():
+    canon = canonical_dict(validate_spec(EMA_CROSS_LONG))
+    assert canon["setup"][0]["event"]["op"] == "crosses_above"
+    assert canon["setup"][0]["event"]["left"]["params"] == {"length": 9, "source": "close"}
+    orb = canonical_dict(validate_spec(OPENING_RANGE_LONG))
+    assert orb["stop"]["at"] == {"ref": "range.low"}
+
+
+def test_cross_works_as_a_filter_too():
+    d = edited(FVG_LONG, "filters.0", {"left": {"price": "close"}, "op": "crosses_below",
+                                       "right": {"block": "ema", "params": {"length": 50}}})
+    validate_spec(d)
+
+
+@pytest.mark.parametrize("path,value,where,words", [
+    ("setup.0.event.op", ">", "setup[0].event.op", "crosses_above"),  # a plain comparison isn't an event
+    ("stop", {"type": "level", "at": {"ref": "cross.left"}}, "stop.at.ref", "cross"),
+])
+def test_cross_errors(path, value, where, words):
+    with pytest.raises(SpecError) as e:
+        validate_spec(edited(EMA_CROSS_LONG, path, value))
+    assert (e.value.path, words in e.value.message) == (where, True)
+
+
+# --- prices vs numbers ------------------------------------------------------------------------------
+
+CLOSE, EMA, ATR = {"price": "close"}, {"block": "ema", "params": {"length": 50}}, {"block": "atr"}
+
+
+@pytest.mark.parametrize("cond,ok", [
+    ({"left": CLOSE, "op": ">", "right": EMA}, True),
+    ({"left": ATR, "op": ">", "right": 20}, True),        # volatility filter
+    ({"left": CLOSE, "op": ">", "right": 18000}, True),   # a constant fits either side
+    ({"left": CLOSE, "op": ">", "right": ATR}, False),    # price vs points
+    ({"left": EMA, "op": "crosses_above", "right": ATR}, False),
+    ({"left": 1, "op": ">", "right": 2}, False),
+])
+def test_compare_needs_like_with_like(cond, ok):
+    data = edited(FVG_LONG, "filters.0", cond)
+    if ok:
+        validate_spec(data)
+    else:
+        with pytest.raises(SpecError) as e:
+            validate_spec(data)
+        assert e.value.path == "filters[0]"
+
+
+def test_atr_is_not_a_price_but_ema_is():
+    with pytest.raises(SpecError) as e:
+        validate_spec(edited(FVG_LONG, "stop.at", ATR))
+    assert e.value.path == "stop.at.output" and "series" in e.value.message
+    validate_spec(edited(FVG_LONG, "stop.at", EMA))
+
+
+# --- same strategy, same hash --------------------------------------------------------------------
+
+def test_filter_order_and_grouping_dont_matter():
+    base = h(DISPLACEMENT_SHORT)
+    reordered = copy.deepcopy(DISPLACEMENT_SHORT)
+    reordered["filters"][0]["all"].reverse()
+    as_list = edited(DISPLACEMENT_SHORT, "filters", DISPLACEMENT_SHORT["filters"][0]["all"])
+    nested = edited(DISPLACEMENT_SHORT, "filters", [{"all": DISPLACEMENT_SHORT["filters"][0]["all"][:2]},
+                                                    DISPLACEMENT_SHORT["filters"][0]["all"][2]])
+    duplicated = edited(as_list, "filters", as_list["filters"] + as_list["filters"][:1])
+    assert h(reordered) == h(as_list) == h(nested) == h(duplicated) == base
+    anys = copy.deepcopy(EMA_CROSS_LONG)
+    anys["filters"][0]["any"].reverse()
+    assert h(anys) == h(EMA_CROSS_LONG)
+
+
+def test_double_not_and_single_item_groups_unwrap():
+    f = FVG_LONG["filters"][0]
+    assert h(edited(FVG_LONG, "filters.0", {"not": {"not": f}})) == h(FVG_LONG)
+    assert h(edited(FVG_LONG, "filters.0", {"any": [f]})) == h(FVG_LONG)
+    assert h(edited(FVG_LONG, "filters.0", {"not": f})) != h(FVG_LONG)
+
+
+def test_param_spellings_dont_matter():
+    days = "filters.0.all.1.event.params.days"
+    assert h(edited(DISPLACEMENT_SHORT, days, ["thu", "tue", "wed", "tue"])) == h(DISPLACEMENT_SHORT)
+    custom = {"block": "time_window", "params": {"session": "custom", "start": "9:30", "end": "10:00"}}
+    padded = {"block": "time_window", "params": {"session": "custom", "start": "09:30", "end": "10:00"}}
+    assert h(edited(FVG_LONG, "filters.0.event", custom)) == h(edited(FVG_LONG, "filters.0.event", padded))
+
+
+def test_engine_version_is_part_of_the_hash(monkeypatch):
+    before = h(FVG_LONG)
+    monkeypatch.setattr(hashing, "ENGINE_VERSION", hashing.ENGINE_VERSION + 1)
+    assert h(FVG_LONG) != before
+
+
+# --- timeframe fit and error quality ------------------------------------------------------------
+
+def test_custom_window_must_sit_on_the_bar_grid():
+    off_grid = {"block": "time_window", "params": {"session": "custom", "start": "09:30", "end": "09:50"}}
+    validate_spec(edited(FVG_LONG, "filters.0.event", off_grid))  # fine on 5m bars
+    with pytest.raises(SpecError) as e:
+        validate_spec(edited(edited(FVG_LONG, "filters.0.event", off_grid), "timeframe", "15m"))
+    assert e.value.path == "filters[0].event.params" and "grid" in e.value.message
+
+
+def test_shape_errors_are_short_and_specific():
+    with pytest.raises(SpecError) as e:
+        validate_spec(edited(FVG_LONG, "entry", {"type": "limit"}))
+    assert "at" in str(e.value) and "market" not in str(e.value).lower()
+    with pytest.raises(SpecError) as e:
+        validate_spec(edited(FVG_LONG, "filters.0", {"evnt": {"block": "time_window"}}))
+    assert "a condition is one of" in str(e.value) and len(str(e.value)) < 200

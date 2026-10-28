@@ -13,7 +13,7 @@ import numpy as np
 from engine.data import io
 from engine.data.instruments import INSTRUMENTS
 
-RTH = (9 * 60 + 30, 16 * 60)  # NY minutes of day, [start, end)
+RTH = (9 * 60 + 30, 16 * 60)  # default RTH window, NY minutes of day, [start, end)
 
 
 @dataclass(frozen=True)
@@ -22,13 +22,14 @@ class Costs:
     spread_overnight: float
     commission: float = 0.0  # points per side
     slippage: float = 0.0  # points per side, market fills only
+    rth: tuple[int, int] = RTH  # NY minutes of day that get the RTH spread
 
     @classmethod
-    def for_instrument(cls, instrument: str, slippage_ticks: int = 0) -> "Costs":
+    def for_instrument(cls, instrument: str, slippage_pts: float = 0.0) -> "Costs":
         inst = INSTRUMENTS[instrument]
         spread = io.manifest(instrument)["spread_pts"]
-        return cls(spread["rth"], spread["overnight"], getattr(inst, "commission_pts", 0.0),
-                   slippage_ticks * inst.price_step)
+        rth = tuple(t.hour * 60 + t.minute for t in inst.rth)
+        return cls(spread["rth"], spread["overnight"], inst.commission_pts, slippage_pts, rth)
 
     def scaled(self, factor: float) -> "Costs":
         """Every cost times `factor`: the costs x1.5 stress test."""
@@ -36,5 +37,5 @@ class Costs:
                        commission=self.commission * factor, slippage=self.slippage * factor)
 
     def spread_per_bar(self, open_minute_ny: np.ndarray) -> np.ndarray:
-        rth = (open_minute_ny >= RTH[0]) & (open_minute_ny < RTH[1])
+        rth = (open_minute_ny >= self.rth[0]) & (open_minute_ny < self.rth[1])
         return np.where(rth, self.spread_rth, self.spread_overnight).astype(np.float64)

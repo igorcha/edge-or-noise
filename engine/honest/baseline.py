@@ -73,7 +73,7 @@ def baseline(trial: Trial, ds: Dataset, n_runs: int = N_RUNS, seed: int = 0) -> 
             entry_kind="market", entry_price=nan, expiry_bars=0, stop_price=nan,
             stop_distance=rng.choice(risks, k), target_price=nan, target_r=target_r,
             max_bars_held=strategy_signals.max_bars_held, max_trades_per_day=strategy_signals.max_trades_per_day,
-            slippage_ticks=strategy_signals.slippage_ticks, price_step=bars.price_step,
+            slippage_pts=strategy_signals.slippage_pts, price_step=bars.price_step,
         )
         out = run_kernel(sig, bars, m1, costs, spread, ranges)
         return out[8][out[0] == kernel.OK]

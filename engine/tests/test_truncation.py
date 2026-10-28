@@ -1,6 +1,7 @@
 """Lookahead harness: every block, computed on bars[:t+1], must match its full-data values up to t.
 
-Runs on real US100 dev bars when built, otherwise on synthetic bars.
+Cut points: random bars, both ends, and bars where an output fires or changes (where a
+"known too early" bug shows). Runs on real US100 dev bars when built, otherwise on synthetic bars.
 """
 
 import zlib
@@ -9,7 +10,7 @@ import numpy as np
 import pytest
 
 from engine.blocks import REGISTRY, Bars, compute
-from engine.blocks.types import ZONE
+from engine.blocks.types import ZONE, Zones
 from engine.data import io
 from engine.data.build import resample, to_close_time
 from engine.tests.test_data import synth_raw
@@ -71,6 +72,21 @@ def test_every_block_has_a_case():
     assert all(c[2] for c in CASES if REGISTRY[c[0]].inputs), "blocks with inputs need an inputs builder"
 
 
+def _change_points(out: dict) -> np.ndarray:
+    """Bars where any output fires or changes value. Lookahead that stamps something too early
+    shows up exactly when the data is cut at such a bar, so these get cut points of their own."""
+    idx = []
+    for v in out.values():
+        if isinstance(v, Zones):
+            idx += [v.created, v.ended[v.ended >= 0]]
+        elif v.dtype == bool:
+            idx.append(np.flatnonzero(v))
+        else:
+            same = (v[1:] == v[:-1]) | (np.isnan(v[1:]) & np.isnan(v[:-1]))
+            idx.append(np.flatnonzero(~same) + 1)
+    return np.unique(np.concatenate(idx)) if idx else np.array([], int)
+
+
 def _assert_zones_match(part, full, t):
     known = full.created <= t
     assert part.created.tolist() == full.created[known].tolist()
@@ -89,7 +105,9 @@ def test_truncation(bars, name, params, inputs):
 
     full = run(bars)
     rng = np.random.default_rng(zlib.crc32(f"{name}{params}".encode()))
-    points = np.r_[rng.integers(0, len(bars), N_POINTS), [0, len(bars) - 1]]
+    changes = _change_points(full)
+    points = np.r_[rng.integers(0, len(bars), N_POINTS), [0, len(bars) - 1],
+                   rng.choice(changes, min(N_POINTS, len(changes)), replace=False)]
     for t in points:
         part = run(bars.head(t + 1))
         for out, kind in REGISTRY[name].outputs.items():

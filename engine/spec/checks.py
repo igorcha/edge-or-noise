@@ -3,24 +3,28 @@
 `validate_spec(dict)` is the one entry point: JSON shape (pydantic) -> semantic checks ->
 canonical form. The canonical form is what gets hashed, so it must be the same for every
 way of writing the same strategy: aliases become block names, omitted params get their
-pinned defaults, a single output is named explicitly.
+pinned defaults, a single output is named explicitly, and filters are flattened, de-duplicated
+and sorted (their order never matters).
 
 Errors carry a JSON path ("setup[1].event.params.max_age") so the LLM retry and the UI
 can point at the field.
 """
 
+import json
 from typing import Any
 
 from pydantic import ValidationError
 
 from engine.blocks.registry import BlockSpec, resolve
 from engine.blocks.types import EVENT, LEVEL, SERIES
+from engine.data.instruments import TIMEFRAMES
 from engine.spec.models import (
-    All, AnyOf, AtrStop, BlockRef, Compare, Condition, Entry, Event, LevelStop, LevelTarget, LimitEntry,
-    MarketEntry, Not, Price, PriceRef, RTarget, Step, Stop, StepRef, Strategy, Target, TicksStop,
+    CROSS_OPS, All, AnyOf, BlockRef, Compare, Condition, Entry, Event, LevelStop, LevelTarget, LimitEntry, Not,
+    Price, PriceRef, Stop, StepRef, Strategy, Target,
 )
 
-PRICE_KINDS = frozenset({LEVEL, SERIES})  # anything that is a price per bar can be an entry/stop/target
+PRICE_KINDS = frozenset({LEVEL})  # what an entry, stop or target can sit at
+OPERAND_KINDS = {LEVEL: "price", SERIES: "number"}
 
 
 class SpecError(ValueError):
@@ -47,29 +51,34 @@ def validate_spec(data: dict[str, Any]) -> Strategy:
 
 
 def canonicalize(spec: Strategy) -> Strategy:
+    """The canonical form of a parsed spec. Only the parts that need normalizing are replaced
+    (model_copy), so a field added to the models later can't be silently dropped from the hash."""
+    tf = TIMEFRAMES[spec.timeframe]
     steps, step_blocks = [], {}
     for i, s in enumerate(spec.setup):
-        ref, block = _block(s.event, {EVENT}, f"setup[{i}].event")
-        steps.append(Step(name=s.name, event=ref, within=s.within))
+        path = f"setup[{i}].event"
+        if isinstance(s.event, Compare):
+            if s.event.op not in CROSS_OPS:
+                raise SpecError(f"{path}.op", f"a setup step must be an event; use {' or '.join(CROSS_OPS)}, "
+                                              f"or put a plain comparison in filters")
+            event, block = _compare(s.event, path, tf), None
+        else:
+            event, block = _block(s.event, {EVENT}, path, tf)
+        steps.append(s.model_copy(update={"event": event}))
         step_blocks[s.name] = block
-    return Strategy(
-        version=spec.version,
-        instrument=spec.instrument,
-        timeframe=spec.timeframe,
-        direction=spec.direction,
-        filters=[_condition(c, f"filters[{i}]") for i, c in enumerate(spec.filters)],
-        setup=steps,
-        entry=_entry(spec.entry, step_blocks),
-        stop=_stop(spec.stop, step_blocks),
-        target=_target(spec.target, step_blocks),
-        limits=spec.limits,
-        slippage_ticks=spec.slippage_ticks,
-    )
+    filters = [_condition(c, f"filters[{i}]", tf) for i, c in enumerate(spec.filters)]
+    return spec.model_copy(update={
+        "filters": _group(filters, All),  # the filter list is an implicit `all`
+        "setup": steps,
+        "entry": _entry(spec.entry, step_blocks, tf),
+        "stop": _stop(spec.stop, step_blocks, tf),
+        "target": _target(spec.target, step_blocks, tf),
+    })
 
 
 # --- blocks ----------------------------------------------------------------------------------
 
-def _block(ref: BlockRef, need: set[str], path: str) -> tuple[BlockRef, BlockSpec]:
+def _block(ref: BlockRef, need: set[str], path: str, tf: int) -> tuple[BlockRef, BlockSpec]:
     """Resolve a block reference: name, params with defaults, inputs, and an output of kind `need`."""
     try:
         block = resolve(ref.block)
@@ -77,9 +86,10 @@ def _block(ref: BlockRef, need: set[str], path: str) -> tuple[BlockRef, BlockSpe
         raise SpecError(f"{path}.block", f"unknown block {ref.block!r}") from None
     try:
         params = block.params(**ref.params)
+        params.check_timeframe(tf)
     except ValidationError as e:
         raise SpecError(f"{path}.params", _format_validation_error(e)) from None
-    except TypeError as e:  # non-string keys
+    except (TypeError, ValueError) as e:  # non-string keys; params that don't fit the timeframe
         raise SpecError(f"{path}.params", str(e)) from None
 
     extra = set(ref.inputs) - set(block.inputs)
@@ -88,7 +98,7 @@ def _block(ref: BlockRef, need: set[str], path: str) -> tuple[BlockRef, BlockSpe
     missing = set(block.inputs) - set(ref.inputs)
     if missing:
         raise SpecError(f"{path}.inputs", f"{block.name} needs inputs {sorted(missing)}")
-    inputs = {k: _block(v, {block.inputs[k]}, f"{path}.inputs.{k}")[0] for k, v in sorted(ref.inputs.items())}
+    inputs = {k: _block(v, {block.inputs[k]}, f"{path}.inputs.{k}", tf)[0] for k, v in sorted(ref.inputs.items())}
 
     output = ref.output
     if output is None:
@@ -107,34 +117,64 @@ def _block(ref: BlockRef, need: set[str], path: str) -> tuple[BlockRef, BlockSpe
 
 # --- conditions ----------------------------------------------------------------------------------
 
-def _condition(c: Condition, path: str) -> Condition:
+def _key(c) -> str:
+    return json.dumps(c.model_dump(mode="json", by_alias=True), sort_keys=True)
+
+
+def _group(children: list, cls: type[All] | type[AnyOf]) -> list:
+    """Children of an all/any in canonical order: same-kind groups merged in, duplicates dropped, sorted."""
+    flat = []
+    for c in children:
+        flat.extend((c.all if cls is All else c.any) if isinstance(c, cls) else [c])
+    return sorted({_key(c): c for c in flat}.values(), key=_key)
+
+
+def _condition(c: Condition, path: str, tf: int) -> Condition:
     if isinstance(c, Event):
-        return Event(event=_block(c.event, {EVENT}, f"{path}.event")[0])
+        return Event(event=_block(c.event, {EVENT}, f"{path}.event", tf)[0])
     if isinstance(c, Compare):
-        return Compare(left=_operand(c.left, f"{path}.left"), op=c.op, right=_operand(c.right, f"{path}.right"))
-    if isinstance(c, All):
-        return All(all=[_condition(x, f"{path}.all[{i}]") for i, x in enumerate(c.all)])
-    if isinstance(c, AnyOf):
-        return AnyOf(any=[_condition(x, f"{path}.any[{i}]") for i, x in enumerate(c.any)])
+        return _compare(c, path, tf)
+    if isinstance(c, (All, AnyOf)):
+        field = "all" if isinstance(c, All) else "any"
+        kids = _group([_condition(x, f"{path}.{field}[{i}]", tf) for i, x in enumerate(getattr(c, field))], type(c))
+        return kids[0] if len(kids) == 1 else type(c)(**{field: kids})
     if isinstance(c, Not):
-        return Not(**{"not": _condition(c.not_, f"{path}.not")})
+        inner = _condition(c.not_, f"{path}.not", tf)
+        return inner.not_ if isinstance(inner, Not) else Not(**{"not": inner})
     raise SpecError(path, f"unknown condition {type(c).__name__}")
 
 
-def _operand(o: float | Price | BlockRef, path: str):
+def _compare(c: Compare, path: str, tf: int) -> Compare:
+    left, lu = _operand(c.left, f"{path}.left", tf)
+    right, ru = _operand(c.right, f"{path}.right", tf)
+    if lu is None and ru is None:
+        raise SpecError(path, "compares two constants")
+    if lu and ru and lu != ru:
+        raise SpecError(path, f"compares a {lu} with a {ru}; compare prices with prices (close, levels, EMA) "
+                              f"and numbers with numbers (ATR, constants)")
+    return c.model_copy(update={"left": left, "right": right})
+
+
+def _operand(o: float | Price | BlockRef, path: str, tf: int) -> tuple[Any, str | None]:
+    """The canonical operand and what it measures: "price", "number", or None for a constant."""
     if isinstance(o, BlockRef):
-        return _block(o, PRICE_KINDS, path)[0]
-    return o
+        ref, block = _block(o, set(OPERAND_KINDS), path, tf)
+        return ref, OPERAND_KINDS[block.outputs[ref.output]]
+    if isinstance(o, Price):
+        return o, "price"
+    return o, None
 
 
 # --- prices: entry, stop, target -------------------------------------------------------------------
 
-def _price(p: PriceRef, step_blocks: dict[str, BlockSpec], path: str) -> PriceRef:
+def _price(p: PriceRef, step_blocks: dict[str, BlockSpec | None], path: str, tf: int) -> PriceRef:
     if isinstance(p, BlockRef):
-        return _block(p, PRICE_KINDS, path)[0]
-    block = step_blocks.get(p.step)
-    if block is None:
+        return _block(p, PRICE_KINDS, path, tf)[0]
+    if p.step not in step_blocks:
         raise SpecError(f"{path}.ref", f"no setup step named {p.step!r}, steps are {sorted(step_blocks)}")
+    block = step_blocks[p.step]
+    if block is None:
+        raise SpecError(f"{path}.ref", f"step {p.step!r} is a cross, it has no prices to refer to")
     kind = block.outputs.get(p.output)
     if kind is None:
         raise SpecError(f"{path}.ref", f"step {p.step!r} ({block.name}) has no output {p.output!r}, "
@@ -144,22 +184,19 @@ def _price(p: PriceRef, step_blocks: dict[str, BlockSpec], path: str) -> PriceRe
     return p
 
 
-def _entry(e: Entry, step_blocks) -> Entry:
+def _entry(e: Entry, step_blocks, tf: int) -> Entry:
     if isinstance(e, LimitEntry):
-        return LimitEntry(type="limit", at=_price(e.at, step_blocks, "entry.at"),
-                          offset_ticks=e.offset_ticks, expiry_bars=e.expiry_bars)
-    return MarketEntry()
+        return e.model_copy(update={"at": _price(e.at, step_blocks, "entry.at", tf)})
+    return e
 
 
-def _stop(s: Stop, step_blocks) -> Stop:
+def _stop(s: Stop, step_blocks, tf: int) -> Stop:
     if isinstance(s, LevelStop):
-        return LevelStop(type="level", at=_price(s.at, step_blocks, "stop.at"), buffer_ticks=s.buffer_ticks)
-    assert isinstance(s, (AtrStop, TicksStop))
+        return s.model_copy(update={"at": _price(s.at, step_blocks, "stop.at", tf)})
     return s
 
 
-def _target(t: Target, step_blocks) -> Target:
+def _target(t: Target, step_blocks, tf: int) -> Target:
     if isinstance(t, LevelTarget):
-        return LevelTarget(type="level", at=_price(t.at, step_blocks, "target.at"))
-    assert isinstance(t, RTarget)
+        return t.model_copy(update={"at": _price(t.at, step_blocks, "target.at", tf)})
     return t

@@ -58,6 +58,22 @@ def test_time_window_rejects_bad_params(params):
         compute("time_window", flat(["2026-03-10 10:00"]), params)
 
 
+def test_window_edges_must_be_on_the_bar_grid():
+    params = {"session": "custom", "start": "09:30", "end": "09:50"}
+    compute("time_window", flat(["2026-03-10 09:30"], tf=5), params)
+    with pytest.raises(ValueError, match="grid"):
+        compute("time_window", flat(["2026-03-10 09:30"], tf=15), params)
+    with pytest.raises(ValueError, match="grid"):
+        compute("window_high_low", flat(["2026-03-10 09:30"], tf=15), {"window": "custom", "start": "09:30", "end": "09:50"})
+
+
+def test_time_and_day_params_are_normalised():
+    assert REGISTRY["time_window"].params(session="custom", start="9:30", end="10:00").start == "09:30"
+    assert REGISTRY["day_of_week"].params(days=["thu", "tue", "thu"]).days == ("tue", "thu")
+    with pytest.raises(ValidationError):
+        REGISTRY["day_of_week"].params(days=[])
+
+
 def test_day_of_week_uses_trading_day():
     b = flat(["2026-03-08 18:00", "2026-03-09 10:00", "2026-03-13 10:00"])  # Sun evening, Mon, Fri
     assert compute("day_of_week", b, {"days": ["mon"]})["value"].tolist() == [True, True, False]
@@ -76,6 +92,7 @@ def test_prior_day_appears_at_next_trading_day():
     out = compute("window_high_low", b, {"window": "day"})
     np.testing.assert_array_equal(out["high"], [NAN, NAN, NAN, 130, 130])
     np.testing.assert_array_equal(out["low"], [NAN, NAN, NAN, 90, 90])
+    assert np.flatnonzero(out["updated"]).tolist() == [3]
 
 
 def test_session_high_low_final_at_session_end():
@@ -87,6 +104,7 @@ def test_session_high_low_final_at_session_end():
     out = compute("window_high_low", b, {"window": "london"})
     np.testing.assert_array_equal(out["high"], [NAN, 108, 108])
     np.testing.assert_array_equal(out["low"], [NAN, 97, 97])
+    assert np.flatnonzero(out["updated"]).tolist() == [1]
 
 
 def test_session_with_missing_last_bar_finalises_on_next_bar():
@@ -231,6 +249,7 @@ def test_catalog_is_json_and_aliases_unique():
     names = [a for s in REGISTRY.values() for a in (s.name, *s.aliases)]
     assert len(names) == len(set(names)), "an alias maps to two blocks"
     assert "vwap" in cat["unsupported"]
+    assert '"title"' not in json.dumps(cat)  # pydantic noise stripped from the LLM prompt
 
 
 @pytest.mark.parametrize("alias", ["Turtle Soup", "spring", "stop run"])
