@@ -36,7 +36,7 @@ BASE = {
         {"name": "gap", "event": {"block": "fvg", "params": {"direction": "bullish"}, "output": "formed"}, "within": 5},
     ],
     "entry": {"type": "limit", "at": {"ref": "gap.top"}, "expiry_bars": 10},
-    "stop": {"type": "level", "at": {"ref": "gap.bottom"}, "buffer_ticks": 10},
+    "stop": {"type": "level", "at": {"ref": "gap.bottom"}, "buffer_pts": 0.1},
     "target": {"type": "r_multiple", "r": 2},
 }
 
@@ -116,9 +116,34 @@ def test_market_entry_with_atr_stop_and_level_target():
     assert s.max_trades_per_day == 3 and s.max_bars_held == 8
 
 
-def test_ticks_stop():
-    s = run(stop={"type": "ticks", "ticks": 150})
+def test_points_stop():
+    s = run(stop={"type": "points", "points": 1.5})
     assert s.stop_distance[0] == pytest.approx(1.5)
+
+
+# --- crosses as setup steps ----------------------------------------------------------------------
+
+def test_cross_step_fires_once_on_the_crossing_bar():
+    # closes 100, 99, 99.5, 99.8, 102.8, 103, 102.5: close crosses above 102 at bar 4 only
+    cross = {"name": "up", "event": {"left": {"price": "close"}, "op": "crosses_above", "right": 102}}
+    s = run(setup=[cross], entry={"type": "market"}, stop={"type": "points", "points": 1})
+    assert s.bar.tolist() == [4] and s.steps["up"].tolist() == [4] and s.geometry == {}
+    down = {"name": "dn", "event": {"left": {"price": "close"}, "op": "crosses_below", "right": 102.6}}
+    s = run(setup=[down], entry={"type": "market"}, stop={"type": "points", "points": 1}, direction="short")
+    assert s.bar.tolist() == [6]
+
+
+def test_cross_with_unknown_side_never_fires():
+    ema = {"block": "ema", "params": {"length": 50}}  # NaN throughout
+    cross = {"name": "up", "event": {"left": {"price": "close"}, "op": "crosses_above", "right": ema}}
+    assert len(run(setup=[cross], entry={"type": "market"}, stop={"type": "points", "points": 1})) == 0
+
+
+def test_cross_then_block_step_with_geometry():
+    cross = {"name": "up", "event": {"left": {"price": "close"}, "op": "crosses_above", "right": 99.7}}
+    gap = {"name": "gap", "event": {"block": "fvg", "params": {"direction": "bullish"}, "output": "formed"}, "within": 3}
+    s = run(setup=[cross, gap])  # close crosses 99.7 at bar 3 (99.5 -> 99.8), gap at bar 5
+    assert s.steps["up"].tolist() == [3] and s.bar.tolist() == [5] and s.geometry["gap.top"][0] == 101
 
 
 # --- dropping what can't be traded --------------------------------------------------------------

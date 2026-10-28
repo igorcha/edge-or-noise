@@ -23,7 +23,7 @@ from engine.blocks.types import LEVEL
 from engine.spec.checks import canonicalize
 from engine.spec.models import (
     All, AnyOf, AtrStop, BlockRef, Compare, Condition, Event, LevelStop, LevelTarget, LimitEntry, Not, Price,
-    PriceRef, RTarget, StepRef, Strategy, TicksStop,
+    PointsStop, PriceRef, RTarget, StepRef, Strategy,
 )
 
 
@@ -45,7 +45,7 @@ class Signals:
     target_r: float  # R multiple, NaN when absolute
     max_bars_held: int  # 0 = no time stop
     max_trades_per_day: int
-    slippage_ticks: int
+    slippage_pts: float  # per side, market fills only
     price_step: float
     steps: dict[str, np.ndarray] = field(default_factory=dict)  # step name -> bar it fired on
     geometry: dict[str, np.ndarray] = field(default_factory=dict)  # "gap.top" -> level at that step's bar
@@ -65,11 +65,10 @@ def interpret(spec: Strategy, bars: Bars) -> Signals:
     spec = canonicalize(spec)
     ev = _Evaluator(bars)
     sign = 1 if spec.direction == "long" else -1
-    tick = bars.price_step
     dropped: dict[str, int] = {}
 
     # Setup sequence -> candidate signal bars and the bar each step fired on.
-    step_events = [ev.array(s.event) for s in spec.setup]
+    step_events = [ev.event(s.event) for s in spec.setup]
     step_bars = chain([s.within for s in spec.setup], step_events)
     signal = step_bars[-1]
     mask = np.ones(len(signal), bool)
@@ -79,7 +78,7 @@ def interpret(spec: Strategy, bars: Bars) -> Signals:
     signal, step_bars = signal[mask], [b[mask] for b in step_bars]
     steps = {s.name: b for s, b in zip(spec.setup, step_bars)}
     geometry = {f"{s.name}.{out}": ev.output(s.event, out)[b]
-                for s, b in zip(spec.setup, step_bars)
+                for s, b in zip(spec.setup, step_bars) if isinstance(s.event, BlockRef)  # a cross has no levels
                 for out, kind in resolve(s.event.block).outputs.items() if kind == LEVEL}
 
     def price(ref: PriceRef) -> np.ndarray:
@@ -91,16 +90,16 @@ def interpret(spec: Strategy, bars: Bars) -> Signals:
     nan = np.full(n, np.nan)
     entry_price, expiry = nan, 0
     if isinstance(spec.entry, LimitEntry):
-        entry_price = price(spec.entry.at) + spec.entry.offset_ticks * tick
+        entry_price = price(spec.entry.at) + spec.entry.offset_pts
         expiry = spec.entry.expiry_bars
 
     stop_price, stop_distance = nan, nan
     if isinstance(spec.stop, LevelStop):
-        stop_price = price(spec.stop.at) - sign * spec.stop.buffer_ticks * tick
+        stop_price = price(spec.stop.at) - sign * spec.stop.buffer_pts
     elif isinstance(spec.stop, AtrStop):
         stop_distance = spec.stop.multiple * atr_values(bars, spec.stop.length)[signal]
-    elif isinstance(spec.stop, TicksStop):
-        stop_distance = np.full(n, spec.stop.ticks * tick)
+    elif isinstance(spec.stop, PointsStop):
+        stop_distance = np.full(n, spec.stop.points)
 
     target_price, target_r = nan, np.nan
     if isinstance(spec.target, LevelTarget):
@@ -134,7 +133,7 @@ def interpret(spec: Strategy, bars: Bars) -> Signals:
         bar=signal, direction=sign, entry_kind=spec.entry.type, entry_price=entry_price, expiry_bars=expiry,
         stop_price=stop_price, stop_distance=stop_distance, target_price=target_price, target_r=target_r,
         max_bars_held=spec.limits.max_bars_held or 0, max_trades_per_day=spec.limits.max_trades_per_day,
-        slippage_ticks=spec.slippage_ticks, price_step=tick, steps=steps, geometry=geometry, dropped=dropped,
+        slippage_pts=spec.slippage_pts, price_step=bars.price_step, steps=steps, geometry=geometry, dropped=dropped,
     )
     return out.take(keep) if not keep.all() else out
 
@@ -182,7 +181,9 @@ def _ffill_index(flags: np.ndarray) -> np.ndarray:
 
 
 def _step_block(spec: Strategy, name: str) -> BlockRef:
-    return next(s.event for s in spec.setup if s.name == name)
+    event = next(s.event for s in spec.setup if s.name == name)
+    assert isinstance(event, BlockRef), "checks.py refuses step refs to a cross"
+    return event
 
 
 def _drop(dropped: dict[str, int], reason: str, keep: np.ndarray) -> None:
@@ -217,13 +218,28 @@ class _Evaluator:
             return self.array(o)
         return o
 
+    def event(self, e: BlockRef | Compare) -> np.ndarray:
+        """A setup step's event: a block's event output, or a cross."""
+        return self.compare(e) if isinstance(e, Compare) else self.array(e)
+
+    def compare(self, c: Compare) -> np.ndarray:
+        left, right = self.operand(c.left), self.operand(c.right)
+        with np.errstate(invalid="ignore"):  # NaN compares False: an unknown value never passes a filter
+            if c.op in ("crosses_above", "crosses_below"):
+                # above this bar and not above on the previous (closed) bar; NaN on either bar is no cross
+                gt, le = (np.greater, np.less_equal) if c.op == "crosses_above" else (np.less, np.greater_equal)
+                now = gt(left, right)
+                before = le(left, right)
+                out = np.zeros(len(self.bars), bool)
+                out[1:] = now[1:] & before[:-1]
+                return out
+            return {">": np.greater, "<": np.less, ">=": np.greater_equal, "<=": np.less_equal}[c.op](left, right)
+
     def condition(self, c: Condition) -> np.ndarray:
         if isinstance(c, Event):
             return self.array(c.event)
         if isinstance(c, Compare):
-            left, right = self.operand(c.left), self.operand(c.right)
-            with np.errstate(invalid="ignore"):  # NaN compares False: an unknown value never passes a filter
-                return {">": np.greater, "<": np.less, ">=": np.greater_equal, "<=": np.less_equal}[c.op](left, right)
+            return self.compare(c)
         if isinstance(c, All):
             return np.logical_and.reduce([self.condition(x) for x in c.all])
         if isinstance(c, AnyOf):

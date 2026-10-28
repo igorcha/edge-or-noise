@@ -15,6 +15,10 @@ from engine.blocks.context import Bars
 class Params(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    def check_timeframe(self, tf_minutes: int) -> None:
+        """Raise ValueError if these params don't fit bars of this size. Called by `compute` and
+        by the spec checks, which know the project's timeframe."""
+
 
 @dataclass(frozen=True)
 class BlockSpec:
@@ -64,7 +68,19 @@ def compute(name: str, bars: Bars, params: dict | None = None, **inputs) -> dict
     missing = set(spec.inputs) - set(inputs)
     if missing:
         raise TypeError(f"{spec.name} needs inputs {sorted(missing)}")
-    return spec.fn(bars, spec.params(**(params or {})), **inputs)
+    p = spec.params(**(params or {}))
+    p.check_timeframe(bars.tf_minutes)
+    return spec.fn(bars, p, **inputs)
+
+
+def _strip_titles(schema):
+    """Drop pydantic's generated "title" keys, which are noise in the LLM prompt."""
+    if isinstance(schema, dict):
+        return {k: ({name: _strip_titles(f) for name, f in v.items()} if k == "properties" else _strip_titles(v))
+                for k, v in schema.items() if k != "title"}
+    if isinstance(schema, list):
+        return [_strip_titles(v) for v in schema]
+    return schema
 
 
 def catalog() -> dict:
@@ -74,7 +90,7 @@ def catalog() -> dict:
                 "name": s.name,
                 "description": s.description,
                 "aliases": list(s.aliases),
-                "params": s.params.model_json_schema(),
+                "params": _strip_titles(s.params.model_json_schema()),
                 "inputs": s.inputs,
                 "outputs": s.outputs,
             }
