@@ -119,6 +119,20 @@ def test_limit_expires_and_blocks_new_signals_while_working():
     assert res.skipped == {"expired": 2, "busy": 2}  # bar 0's order works through 5m bars 1-2; bar 3's through 4
 
 
+def test_long_limit_pays_its_price_and_no_spread_charge():
+    # buy limit 99: the ask (bid + 0.5) trades through it on bar 6; the bid trades through the 101 target on bar 8
+    rows = [FLAT] * 5 + [(100, 100.5, 99.5, 100), (99.5, 99.6, 98.4, 98.8), (98.8, 100, 98.8, 99.9),
+                         (100, 101.2, 99.9, 101)] + [FLAT] * 6
+    m1, tf = m1_bars(rows)
+    t = one(simulate(sig(entry=99.0, stop=98.0, target=101.0, expiry=3), tf, m1, Costs(0.5, 0.5)))
+    assert (t.entry, t.exit, t.exit_reason) == (99, 101, "target")
+    assert t.cost_R == 0 and t.R == 2  # bought at 99, sold at 101, risk 1: the spread is already in the fill
+    rows = [FLAT] * 5 + [(98.2, 100.5, 98, 100)] + [FLAT] * 9  # ask open 98.7 is below the limit: fill there
+    m1, tf = m1_bars(rows)
+    t = one(simulate(sig(entry=99.0, stop=97.0, target=101.0), tf, m1, Costs(0.5, 0.5)))
+    assert t.entry == pytest.approx(98.7) and t.cost_R == 0
+
+
 def test_limit_price_is_the_ask_for_longs():
     rows = [FLAT] * 5 + [(100, 100.5, 98.9, 100)] + [FLAT] * 9  # bid low 98.9: ask low 99.4 with a 0.5 spread
     m1, tf = m1_bars(rows)
@@ -262,3 +276,32 @@ def test_examples_end_to_end(data, name):
     assert (t.mae_R >= 0).all() and (t.mfe_R >= 0).all()
     assert (t.groupby(t.signal_time.dt.date).size() <= spec.limits.max_trades_per_day * 2).all()
     metrics(t)
+
+
+TRADE_FIELDS = ["entry", "exit", "stop", "target", "exit_reason", "R", "cost_R", "mae_R", "mfe_R", "bars_held",
+                "signal_bar", "entry_bar", "exit_bar", "entry_m1", "exit_m1"]
+ENTRY_FIELDS = ["entry", "stop", "target", "signal_bar", "entry_bar", "entry_m1"]
+
+
+@pytest.mark.parametrize("name", sorted(EXAMPLES))
+def test_examples_truncation(data, name):
+    """Cut both bar sets at a strategy bar's close: trades that closed by then are identical, trades
+    still open are the same entries closed at the cut ("end"), and nothing later exists."""
+    import zlib
+    tf, m1 = data
+    spec = validate_spec({**EXAMPLES[name], "timeframe": "5m"})
+    costs = Costs(0.5, 1.0, commission=0.02, slippage=0.1)
+    full = simulate(interpret(spec, tf), tf, m1, costs).trades
+    rng = np.random.default_rng(zlib.crc32(name.encode()))
+    marks = np.unique(np.r_[full.entry_bar, full.exit_bar, full.exit_bar - 1, full.signal_bar]).astype(int)
+    marks = marks[(marks >= 0) & (marks < len(tf))]
+    cuts = np.r_[rng.integers(0, len(tf), 10), rng.choice(marks, min(25, len(marks)), replace=False)]
+    for t in cuts:
+        k = int(np.searchsorted(m1.close_time.asi8, tf.close_time.asi8[t], side="right"))  # 1m bars kept
+        part = simulate(interpret(spec, tf.head(t + 1)), tf.head(t + 1), m1.head(k), costs).trades
+        want = full[full.entry_m1 <= k - 1].reset_index(drop=True)
+        assert len(part) == len(want), f"t={t}"
+        closed = (want.exit_m1 <= k - 1).to_numpy()
+        pd.testing.assert_frame_equal(part.loc[closed, TRADE_FIELDS], want.loc[closed, TRADE_FIELDS], obj=f"t={t}")
+        pd.testing.assert_frame_equal(part.loc[~closed, ENTRY_FIELDS], want.loc[~closed, ENTRY_FIELDS], obj=f"t={t}")
+        assert (part.loc[~closed, "exit_reason"] == "end").all()
