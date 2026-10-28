@@ -33,7 +33,7 @@ def main() -> int:
 
     t0 = time.time()
     warm()
-    ds = load_dev(spec.instrument, spec.timeframe, spec.slippage_ticks)
+    ds = load_dev(spec.instrument, spec.timeframe, spec.slippage_pts)
     print(f"{spec.instrument} {spec.timeframe}: {len(ds.bars):,} bars to {ds.bars.close_time[-1]}, "
           f"holdout sealed after {ds.boundary} ({time.time() - t0:.1f}s)")
 

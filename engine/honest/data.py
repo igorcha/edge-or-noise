@@ -31,13 +31,13 @@ class Dataset:
         return "holdout" if self.exam else "development"
 
 
-def load_dev(instrument: str, timeframe: str, slippage_ticks: int = 0) -> Dataset:
+def load_dev(instrument: str, timeframe: str, slippage_pts: float = 0.0) -> Dataset:
     return Dataset(instrument, timeframe, Bars.load(instrument, timeframe), Bars.load(instrument, "1m"),
-                   Costs.for_instrument(instrument, slippage_ticks), io.holdout_boundary(instrument))
+                   Costs.for_instrument(instrument, slippage_pts), io.holdout_boundary(instrument))
 
 
-def load_exam(instrument: str, timeframe: str, slippage_ticks: int = 0) -> Dataset:
+def load_exam(instrument: str, timeframe: str, slippage_pts: float = 0.0) -> Dataset:
     """Full history including the holdout. Call once per project, from the final exam only."""
     return Dataset(instrument, timeframe, Bars.load(instrument, timeframe, include_holdout=True),
                    Bars.load(instrument, "1m", include_holdout=True),
-                   Costs.for_instrument(instrument, slippage_ticks), io.holdout_boundary(instrument), exam=True)
+                   Costs.for_instrument(instrument, slippage_pts), io.holdout_boundary(instrument), exam=True)

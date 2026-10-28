@@ -55,7 +55,7 @@ def test_trial_runs_and_has_metrics(trial):
 
 def test_spec_slippage_overrides_dataset_costs(spec, ds):
     cheap = run_trial(spec, ds)
-    slipped = run_trial(validate_spec({**FVG_LONG, "slippage_ticks": 50}), ds)
+    slipped = run_trial(validate_spec({**FVG_LONG, "slippage_pts": 0.5}), ds)
     assert slipped.spec_hash != cheap.spec_hash
     assert slipped.metrics["expectancy_R"] < cheap.metrics["expectancy_R"]
 

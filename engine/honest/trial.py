@@ -5,7 +5,7 @@ change to a rule, a block parameter or slippage is a new one. Stress tests and t
 use `run_trial` too but don't go through the ledger, so they don't count.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
@@ -34,8 +34,8 @@ def run_trial(spec: Strategy, ds: Dataset, costs: Costs | None = None) -> Trial:
     if spec.instrument != ds.instrument or spec.timeframe != ds.timeframe:
         raise ValueError(f"spec is for {spec.instrument} {spec.timeframe}, dataset is {ds.instrument} {ds.timeframe}")
     costs = costs if costs is not None else ds.costs
-    if costs.slippage != spec.slippage_ticks * ds.bars.price_step:
-        costs = Costs(costs.spread_rth, costs.spread_overnight, costs.commission, spec.slippage_ticks * ds.bars.price_step)
+    if costs.slippage != spec.slippage_pts:  # slippage is part of the spec, so it's part of the trial
+        costs = replace(costs, slippage=spec.slippage_pts)
     res: Result = simulate(interpret(spec, ds.bars), ds.bars, ds.m1, costs)
     trades = res.trades
     if ds.exam:
