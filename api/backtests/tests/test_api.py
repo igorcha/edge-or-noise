@@ -85,7 +85,7 @@ def test_trial_counter_and_results(client, project):
     # a no-op resave (explicit defaults, alias) is the same trial
     same = spec_without_fixed_fields()
     same["setup"][1]["event"]["block"] = "fair value gap"
-    same["slippage_ticks"] = 0
+    same["slippage_pts"] = 0
     r = client.post(f"/api/projects/{pid}/trials", {"spec": same}, format="json")
     assert r.status_code == 200 and r.json()["number"] == 1 and not r.json()["is_new"]
     assert client.get(f"/api/projects/{pid}").json()["trial_count"] == 1

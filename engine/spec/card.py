@@ -8,8 +8,8 @@ text; the UI shows the sections next to the editable form.
 from engine.blocks.timing import SESSIONS
 from engine.spec.checks import canonicalize
 from engine.spec.models import (
-    All, AnyOf, AtrStop, BlockRef, Compare, Condition, Event, LevelStop, LevelTarget, LimitEntry, Not, Price,
-    PriceRef, RTarget, StepRef, Strategy, TicksStop,
+    All, AnyOf, AtrStop, BlockRef, Compare, Condition, Event, LevelStop, LevelTarget, LimitEntry, Not, PointsStop,
+    Price, PriceRef, RTarget, StepRef, Strategy,
 )
 
 SESSION_NAMES = {"asia": "Asia", "london": "London", "ny_am": "NY AM", "ny_pm": "NY PM"}
@@ -19,7 +19,7 @@ TF_NAMES = {"1m": "1-minute", "5m": "5-minute", "15m": "15-minute"}
 
 def render_card(spec: Strategy) -> dict:
     spec = canonicalize(spec)
-    steps = {s.name: s.event for s in spec.setup}
+    steps = {s.name: s.event for s in spec.setup if isinstance(s.event, BlockRef)}  # a cross has no prices
     sections = {
         "direction": f"{spec.direction.capitalize()} {spec.instrument} on {TF_NAMES.get(spec.timeframe, spec.timeframe)} bars.",
         "filters": _filters(spec),
@@ -58,6 +58,8 @@ def describe(ref: BlockRef, output: str | None = None) -> str:
         case "day_of_week":
             return "on " + ", ".join(DAY_NAMES[d] for d in p["days"])
         case "window_high_low":
+            if out == "updated":
+                return f"the {_window(p)} completes"
             return f"the {_window(p)} {out}"
         case "swing":
             kind = "high" if out in ("high", "new_high") else "low"
@@ -95,11 +97,15 @@ def _operand(o) -> str:
     return f"{o:g}"
 
 
+OPS = {">": "is above", "<": "is below", ">=": "is at or above", "<=": "is at or below",
+       "crosses_above": "crosses above", "crosses_below": "crosses below"}
+
+
 def _condition(c: Condition) -> str:
     if isinstance(c, Event):
         return describe(c.event)
     if isinstance(c, Compare):
-        return f"{_operand(c.left)} {c.op} {_operand(c.right)}"
+        return f"{_operand(c.left)} {OPS[c.op]} {_operand(c.right)}"
     if isinstance(c, All):
         return " and ".join(_wrap(x) for x in c.all)
     if isinstance(c, AnyOf):
@@ -125,13 +131,15 @@ def _price(ref: PriceRef, steps: dict[str, BlockRef]) -> str:
 def _filters(spec: Strategy) -> str:
     if not spec.filters:
         return "No filters: any bar can start a setup."
+    if len(spec.filters) == 1:
+        return "Only " + _condition(spec.filters[0]) + "."
     return "Only " + " and ".join(_wrap(c) for c in spec.filters) + "."
 
 
 def _setup(spec: Strategy) -> str:
     parts = []
     for i, s in enumerate(spec.setup, 1):
-        text = describe(s.event)
+        text = _condition(s.event) if isinstance(s.event, Compare) else describe(s.event)
         if s.within is not None:
             text += f", within {s.within} bar{'s' if s.within != 1 else ''} of the previous step"
         parts.append(f"{i}. {text}")
@@ -142,8 +150,8 @@ def _entry(spec: Strategy, steps) -> str:
     e = spec.entry
     if isinstance(e, LimitEntry):
         where = _price(e.at, steps)
-        if e.offset_ticks:
-            where = f"{abs(e.offset_ticks)} ticks {'above' if e.offset_ticks > 0 else 'below'} {where}"
+        if e.offset_pts:
+            where = f"{abs(e.offset_pts):g} points {'above' if e.offset_pts > 0 else 'below'} {where}"
         return f"Limit order at {where}; cancelled if not filled within {e.expiry_bars} bars."
     return "Market order at the open of the next bar."
 
@@ -152,12 +160,12 @@ def _stop(spec: Strategy, steps) -> str:
     s = spec.stop
     if isinstance(s, LevelStop):
         side = "below" if spec.direction == "long" else "above"
-        prefix = f"{s.buffer_ticks} ticks {side} " if s.buffer_ticks else "At "
+        prefix = f"{s.buffer_pts:g} points {side} " if s.buffer_pts else "At "
         return f"{prefix}{_price(s.at, steps)}."
     if isinstance(s, AtrStop):
         return f"{s.multiple:g} x ATR({s.length}) from the entry."
-    assert isinstance(s, TicksStop)
-    return f"{s.ticks} ticks from the entry."
+    assert isinstance(s, PointsStop)
+    return f"{s.points:g} points from the entry."
 
 
 def _target(spec: Strategy, steps) -> str:
@@ -173,5 +181,5 @@ def _limits(spec: Strategy) -> str:
     parts = [f"At most {n} trade{'s' if n != 1 else ''} per trading day, one position at a time"]
     if spec.limits.max_bars_held:
         parts.append(f"exit after {spec.limits.max_bars_held} bars if still open")
-    parts.append(f"{spec.slippage_ticks} ticks slippage per side")
+    parts.append(f"{spec.slippage_pts:g} points slippage per side")
     return "; ".join(parts) + "."
