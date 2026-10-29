@@ -18,15 +18,11 @@ export function nyDate(iso: string): string {
   return FULL.format(new Date(iso))
 }
 
-const WEEKDAY = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' })
 const DATE = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: 'short', day: 'numeric' })
 
-/** The holdout's first trading day, as "Jun 16, 2025". The boundary is a 17:00 NY close, so the holdout
-    starts with the next trading day: the one after on weekdays, Monday after a Friday. */
+/** The holdout's first trading day, as "Jun 16, 2025". The boundary is when that day starts: 17:00 NY
+    the evening before (trading days roll at 17:00 NY), so 7 hours later is its midnight. */
 export function holdoutFirstDay(boundaryIso: string | null): string {
   if (!boundaryIso) return '—'
-  const d = new Date(boundaryIso)
-  const wd = WEEKDAY.format(d)
-  const days = wd === 'Fri' ? 3 : wd === 'Sat' ? 2 : 1
-  return DATE.format(new Date(d.getTime() + days * 86_400_000))
+  return DATE.format(new Date(Date.parse(boundaryIso) + 7 * 3_600_000))
 }
