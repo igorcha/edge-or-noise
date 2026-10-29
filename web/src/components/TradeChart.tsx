@@ -65,9 +65,10 @@ function BarsChart({ trial, index }: { trial: Trial; index: number }) {
     const tr = win.trade
     const from = time(tr.entry_bar)
     const to = time(tr.exit_bar)
+    const lineTo = from === to ? time(tr.exit_bar + 1) : to  // a line needs two points: one-bar trades span to the next bar
     const span = (price: number, color: string, style: LineStyle) => {
       const s = chart.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: style, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false })
-      s.setData(from === to ? [{ time: from, value: price }] : [{ time: from, value: price }, { time: to, value: price }])
+      s.setData(from === lineTo ? [{ time: from, value: price }] : [{ time: from, value: price }, { time: lineTo, value: price }])
     }
     span(tr.stop, t.neg, LineStyle.Dashed)
     span(tr.target, t.pos, LineStyle.Dashed)

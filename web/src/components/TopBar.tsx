@@ -1,10 +1,10 @@
 import type { Project, TrialSummary } from '../api/types'
-import { fmtDate } from '../lib/format'
+import { holdoutFirstDay } from '../lib/time'
 import { Badge, LockIcon, Logo } from './ui'
 
 export function TopBar({ project, trials }: { project: Project; trials: TrialSummary[] }) {
   const n = project.trial_count
-  const sealedFrom = fmtDate(project.holdout_boundary)
+  const sealedFrom = holdoutFirstDay(project.holdout_boundary)
   const examined = trials.some((t) => t.stage === 'holdout')
   return (
     <header className="topbar">

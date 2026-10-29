@@ -21,6 +21,11 @@ export function explain(v: Verdict): string {
         : 'It beats random entries on the first try. The sealed holdout is the real test.'
   }
   if (v.label === 'probably noise') {
+    if (holdout) {
+      return (v.expectancy_R ?? 0) <= 0
+        ? 'On data it never saw, it loses on average once costs are paid.'
+        : 'On data it never saw, random entries with the same exits did as well: the development result was luck.'
+    }
     if ((v.expectancy_R ?? 0) <= 0) return 'It loses on average once costs are paid.'
     if (v.baseline_beaten != null && v.baseline_beaten < 0.5) {
       return 'Random entries with the same exits did better in most runs: the entries add nothing.'

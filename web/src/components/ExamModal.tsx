@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Project, Trial } from '../api/types'
-import { fmtDate, plural } from '../lib/format'
+import { plural } from '../lib/format'
+import { holdoutFirstDay } from '../lib/time'
 import { LockIcon, Spinner } from './ui'
 
 /** The one-time final exam. It spends the holdout, so it says exactly what that means before it runs. */
@@ -36,7 +37,7 @@ export function ExamModal({ project, trial, onRun, onClose }: {
         <div className="modal-icon"><LockIcon /></div>
         <h2 id="exam-title">Final exam for trial {trial.number}</h2>
         <p className="muted">
-          Everything from {fmtDate(project.holdout_boundary)} on has been sealed: no trial has seen it. The exam runs
+          Everything from {holdoutFirstDay(project.holdout_boundary)} on has been sealed: no trial has seen it. The exam runs
           trial {trial.number}'s exact rules on it, once.
         </p>
         <ul className="modal-list">

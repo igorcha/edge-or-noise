@@ -26,8 +26,10 @@ export function Workspace({ projectId }: { projectId: number }) {
   const [draft, setDraft] = useState<Draft>({ spec: null, preview: null, error: null, checking: false })
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
-  const start = startOf(projectId)
+  const [start] = useState(() => startOf(projectId))  // fixed for this mount, even as the cache below is cleared
   const checkSeq = useRef(0)
+
+  useEffect(() => () => { starts.delete(projectId) }, [projectId])  // consumed: coming back later starts clean
 
   const refresh = useCallback(async () => {
     const [p, ts] = await Promise.all([api.project(projectId), api.trials(projectId)])
