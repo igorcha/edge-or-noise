@@ -18,6 +18,7 @@ chart) reads only it. One row per filled trade:
     signal_bar, entry_bar, exit_bar   strategy-bar indexes, for the chart window
     entry_m1, exit_m1                 1m-bar indexes
     <step>.<level>   setup geometry at the signal (e.g. gap.top), for the chart and the log
+    <step>.bar       strategy-bar index each setup step fired on (e.g. gap.bar), for the chart
 """
 
 from dataclasses import dataclass
@@ -96,6 +97,8 @@ def simulate(signals: Signals, bars: Bars, m1: Bars, costs: Costs) -> Result:
     })
     for name, values in signals.geometry.items():
         trades[name] = values[ok]
+    for name, values in signals.steps.items():
+        trades[f"{name}.bar"] = values[ok]
     skipped = dict(signals.dropped)
     for code, name in enumerate(kernel.STATUS_NAMES):
         if code != kernel.OK and (status == code).any():

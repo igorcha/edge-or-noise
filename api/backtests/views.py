@@ -1,9 +1,12 @@
 """The REST API. Runs are synchronous: a trial with its baseline takes a few seconds.
 
     GET  /api/catalog                      block catalog, spec schema, examples
+    GET  /api/demo                         the shared read-only demo project (manage.py seed_demo)
     POST /api/projects                     {name, instrument, timeframe}
     GET  /api/projects/{id}
     GET  /api/projects/{id}/trials         history (no trade logs)
+    POST /api/projects/{id}/parse          {prompt, answers?} -> Nemotron's spec, questions, assumptions
+    POST /api/projects/{id}/check          {spec} -> canonical spec, rules card, "trial N" or "already trial K"
     POST /api/projects/{id}/trials         {spec} -> runs it; same spec hash = same trial, not a new one
     GET  /api/trials/{id}                  everything, trade log included
     GET  /api/bars?trial=&trade=&before=&after=   strategy bars around one trade (dev data only)
@@ -18,6 +21,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.exceptions import APIException, NotFound, ParseError, ValidationError
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.views import exception_handler as drf_exception_handler
 
@@ -25,6 +29,7 @@ from backtests import services
 from backtests.models import Project, Trial
 from engine.blocks import catalog
 from engine.data.instruments import INSTRUMENTS, TIMEFRAMES
+from engine.llm import LLMError, LLMNotConfigured
 from engine.spec import SpecError, json_schema, validate_spec
 from engine.spec.examples import EXAMPLES
 
@@ -74,6 +79,14 @@ class Catalog(APIView):
     def get(self, request):
         return Response({"catalog": catalog(), "spec_schema": json_schema(), "examples": EXAMPLES,
                          "instruments": sorted(INSTRUMENTS), "timeframes": sorted(TIMEFRAMES, key=TIMEFRAMES.get)})
+
+
+class Demo(APIView):
+    def get(self, request):
+        p = Project.objects.filter(is_demo=True).order_by("-id").first()
+        if p is None:
+            raise NotFound("no demo project; run `manage.py seed_demo`")
+        return Response(project_json(p))
 
 
 class Projects(APIView):
@@ -138,6 +151,55 @@ def _refuse_demo(p: Project) -> None:
         raise Conflict("the demo project is read-only. Start your own project to run trials.")
 
 
+def _known(p: Project) -> dict[str, int]:
+    return dict(p.trials.filter(stage=Trial.DEVELOPMENT).values_list("spec_hash", "number"))
+
+
+class Check(APIView):
+    """Validate an edited spec without running it: the rules card form calls this on every edit."""
+
+    def post(self, request, pk):
+        p = get_object_or_404(Project, pk=pk)
+        data = request.data if isinstance(request.data, dict) else {}
+        if not isinstance(data.get("spec"), dict):
+            raise ParseError("body must be {spec: {...}}")
+        spec = validate_spec({**data["spec"], "instrument": p.instrument, "timeframe": p.timeframe})
+        return Response(services.preview(spec, _known(p), p.trial_count + 1))
+
+
+MAX_PROMPT = 4000
+
+
+class Parse(APIView):
+    throttle_classes = [ScopedRateThrottle]  # every call spends model tokens on our key
+    throttle_scope = "parse"
+
+    def post(self, request, pk):
+        p = get_object_or_404(Project, pk=pk)
+        data = request.data if isinstance(request.data, dict) else {}
+        prompt, answers = data.get("prompt"), data.get("answers") or []
+        if not isinstance(prompt, str) or not prompt.strip():
+            raise ValidationError({"prompt": "describe the strategy"})
+        if len(prompt) > MAX_PROMPT:
+            raise ValidationError({"prompt": f"keep it under {MAX_PROMPT} characters"})
+        if not isinstance(answers, list) or len(answers) > 20 or not all(
+                isinstance(a, dict) and isinstance(a.get("question"), str) and isinstance(a.get("answer"), str)
+                and len(a["question"]) + len(a["answer"]) <= MAX_PROMPT for a in answers):
+            raise ValidationError({"answers": "a list of {question, answer}"})
+        try:
+            result = services.parse(prompt, p.instrument, p.timeframe, answers, _known(p), p.trial_count + 1)
+        except LLMNotConfigured as e:
+            log.error("parse unavailable: %s", e)
+            return Response({"error": "the strategy parser isn't configured; write the rules in the form instead"},
+                            status=503)
+        except LLMError as e:
+            log.warning("parse failed: %s", e)
+            return Response({"error": "the language model didn't answer; try again, or write the rules in the form"},
+                            status=502)
+        log.info("project %s parse: %s after %s call(s)", p.id, result["status"], len(result["attempts"]))
+        return Response(result)
+
+
 class TrialDetail(APIView):
     def get(self, request, pk):
         return Response(trial_json(get_object_or_404(Trial, pk=pk)))
@@ -157,7 +219,8 @@ class BarsWindow(APIView):
             raise NotFound(f"trade index out of range, trial has {len(t.trades)} trades")
         trade = t.trades[trade_i]
         ds = services.dataset(t.project.instrument, t.project.timeframe)
-        window = services.bars_window(ds, trade["signal_bar"], trade["exit_bar"], min(before, 500), min(after, 500))
+        first = min([trade["signal_bar"], *(v for k, v in trade.items() if k.endswith(".bar") and v is not None)])
+        window = services.bars_window(ds, first, trade["exit_bar"], min(before, 500), min(after, 500))
         return Response({**window, "trade": trade, "timeframe": t.project.timeframe})
 
 

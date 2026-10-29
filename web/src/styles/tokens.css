@@ -1,0 +1,57 @@
+/* Design tokens. Dark only. Colour carries meaning (verdict, win/loss, the one accent for actions);
+   everything else is neutral, so the numbers are what you see first. */
+:root {
+  --bg: #0a0c10;
+  --surface: #10131a;
+  --surface-2: #151922;
+  --surface-3: #1b202b;
+  --border: #212733;
+  --border-strong: #2d3443;
+
+  --text: #e6e9ef;
+  --text-2: #a1a9b7;
+  --text-3: #6c7585;
+
+  --accent: #7aa2f7;
+  --accent-hover: #93b4fa;
+  --accent-bg: rgb(122 162 247 / 0.12);
+  --on-accent: #0a0c10;
+
+  --pos: #4cb69a;
+  --pos-bg: rgb(76 182 154 / 0.12);
+  --neg: #e2786d;
+  --neg-bg: rgb(226 120 109 / 0.12);
+  --warn: #d8a94f;
+  --warn-bg: rgb(216 169 79 / 0.12);
+
+  /* the baseline band and other "what luck does" visuals */
+  --luck: #5b6475;
+  --luck-bg: rgb(91 100 117 / 0.22);
+
+  --font: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --topbar-h: 52px;
+  --panel-w: 420px;
+
+  --shadow: 0 8px 28px rgb(0 0 0 / 0.35);
+  --focus: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+}

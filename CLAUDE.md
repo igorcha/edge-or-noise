@@ -144,7 +144,17 @@ It supports:
 - Rules card text is rendered server-side from the spec with templates. The LLM never writes it.
 - Chat edits become a JSON patch against the current spec. The diff becomes the trial's summary line.
 
-**Evaluation:** a golden eval set of 30–50 prompts with expected specs. Score every prompt change against it.
+**Evaluation:** a golden eval set of 30–50 prompts with expected specs (MVP: 12, `engine/llm/golden.py`). Score every prompt change against it.
+
+**Where it lives:** `engine/llm/`.
+- `prompt.py` builds the prompt from the catalog and spec schema.
+- `fewshots.py` holds the few-shots, each validated by tests.
+- `parse.py` holds the envelope handling:
+  - one retry with the validator error
+  - a missing direction, setup, entry, stop or target always becomes a question, never a default
+  - the engine, not the model, lists the defaults it filled in
+  - a keyword check catches unsupported concepts the model dropped
+- `client.py` is the Nemotron client. It's configured by `NEBIUS_*` env vars or a gitignored `.env`.
 
 **Coach:**
 - The engine computes the diagnostics: cost share, exit mix, fast stop-outs, give-backs after +1.5R, and top-5-trade dependence. The LLM only interprets them.
@@ -185,9 +195,16 @@ It supports:
 
 ## Commands
 
-- Setup: `python3 -m venv .venv && .venv/bin/pip install -e ".[dev,fetch]"`
+- Setup: `python3 -m venv .venv && .venv/bin/pip install -e ".[dev,api,fetch]"`
+- LLM keys: `cp .env.example .env` at the repo root, then fill in a key (`.env` is gitignored)
 - Fetch raw data (already done for the frozen MVP dataset): `.venv/bin/python scripts/fetch_data.py --instrument US100 --start 2020-01`
 - Build bars from raw: `.venv/bin/python scripts/build_bars.py --instrument US100`
-- Tests: `.venv/bin/python -m pytest`
+- Tests: `.venv/bin/python -m pytest` (offline; the live LLM eval is opt-in: `pytest -m network`)
+- LLM golden eval with scores and timings: `.venv/bin/python scripts/eval_llm.py [--case NAME] [--show]`
+- Local app:
+  - API: `cd api && ../.venv/bin/python manage.py migrate && ../.venv/bin/python manage.py runserver`
+  - Web: `cd web && npm install && npm run dev`, then open http://localhost:5173; Vite proxies `/api` to :8000.
+- Demo project: `cd api && ../.venv/bin/python manage.py seed_demo [--replace]`
+- Frontend checks: `cd web && npx tsc -b && npx oxlint && npm run build`
 
 <!-- TODO: fill in real commands (tests, dev servers, data scripts, deploy) -->

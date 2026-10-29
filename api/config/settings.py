@@ -6,6 +6,8 @@
     DJANGO_CORS=1         allow any origin (the Vite dev server); off behind Nginx
     POSTGRES_HOST/DB/USER/PASSWORD/PORT   use Postgres; without POSTGRES_HOST a SQLite file in data/
     BACKTESTER_DATA_DIR   where data/bars lives (engine.data.io)
+    NEBIUS_*              the strategy parser's model (engine/llm/client.py)
+    PARSE_RATE            parse calls per client IP, default 60/hour (each one spends model tokens)
 
 No auth: projects are reachable by id. Accounts are out of scope for the MVP.
 """
@@ -63,6 +65,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "UNAUTHENTICATED_USER": None,
     "EXCEPTION_HANDLER": "backtests.views.exception_handler",
+    "DEFAULT_THROTTLE_RATES": {"parse": os.environ.get("PARSE_RATE", "60/hour")},
 }
 
 CORS_ALLOW_ALL = os.environ.get("DJANGO_CORS", "0") == "1"

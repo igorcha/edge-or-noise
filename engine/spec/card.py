@@ -69,9 +69,11 @@ def describe(ref: BlockRef, output: str | None = None) -> str:
             return f"the {_window(p)} {out}"
         case "swing":
             kind = "high" if out in ("high", "new_high") else "low"
+            size = (f"{p['left']} bars each side" if p["left"] == p["right"]
+                    else f"{p['left']} bars left, {p['right']} right")
             if out.startswith("new_"):
-                return f"a swing {kind} is confirmed ({p['left']} bars left, {p['right']} right)"
-            return f"the last confirmed swing {kind} ({p['left']}/{p['right']})"
+                return f"a swing {kind} is confirmed ({size})"
+            return f"the last confirmed swing {kind} ({size})"
         case "fvg":
             if out == "formed":
                 size = f", at least {p['min_size_atr']:g} ATR" if p["min_size_atr"] else ""
@@ -145,7 +147,7 @@ def _filters(spec: Strategy) -> str:
 def _setup(spec: Strategy) -> str:
     parts = []
     for i, s in enumerate(spec.setup, 1):
-        text = _condition(s.event) if isinstance(s.event, Compare) else describe(s.event)
+        text = _cap(_condition(s.event) if isinstance(s.event, Compare) else describe(s.event))
         if s.within is not None:
             text += f", within {s.within} bar{'s' if s.within != 1 else ''} of the previous step"
         parts.append(f"{i}. {text}")

@@ -80,7 +80,9 @@ def test_trial_counter_and_results(client, project):
     assert t1["verdict"]["stage"] == "development" and len(t1["baseline"]["curves"]["p50"]) == t1["metrics"]["n"]
     assert t1["stress"]["factor"] == 1.5 and "Long US100 on 5-minute bars" in t1["card"]
     trade = t1["trades"][0]
-    assert set(trade) >= {"entry", "exit", "stop", "target", "R", "exit_reason", "signal_bar", "exit_bar", "gap.top"}
+    assert set(trade) >= {"entry", "exit", "stop", "target", "R", "exit_reason", "signal_bar", "exit_bar", "gap.top",
+                          "sweep.bar", "gap.bar"}
+    assert trade["sweep.bar"] < trade["gap.bar"] <= trade["signal_bar"] and trade["gap.bar"] - trade["sweep.bar"] <= 10
 
     # a no-op resave (explicit defaults, alias) is the same trial
     same = spec_without_fixed_fields()
@@ -122,7 +124,7 @@ def test_bars_window_around_a_trade(client, project):
     t = client.post(f"/api/projects/{pid}/trials", {"spec": spec_without_fixed_fields()}, format="json").json()
     r = client.get(f"/api/bars?trial={t['id']}&trade=0&before=10&after=5").json()
     trade = t["trades"][0]
-    assert r["first_bar"] == max(0, trade["signal_bar"] - 10) and r["trade"] == trade and r["timeframe"] == "5m"
+    assert r["first_bar"] == max(0, trade["sweep.bar"] - 10) and r["trade"] == trade and r["timeframe"] == "5m"
     bars = r["bars"]
     assert bars[0]["bar"] == r["first_bar"] and bars[-1]["bar"] == min(trade["exit_bar"] + 5, len(bars) + r["first_bar"] - 1)
     assert all(b["low"] <= min(b["open"], b["close"]) <= max(b["open"], b["close"]) <= b["high"] for b in bars)
@@ -175,3 +177,114 @@ def test_demo_is_read_only(client, project):
     assert r.status_code == 409
     assert client.post(f"/api/projects/{project['id']}/exam", {}, format="json").status_code == 409
     assert client.get(f"/api/projects/{project['id']}").json()["trial_count"] == 0
+
+
+# --- parse (a scripted model stands in for Nemotron) ----------------------------------------------------
+
+class ScriptedLLM:
+    def __init__(self, *replies):
+        self.replies = list(replies)
+
+    def complete(self, messages, schema=None):
+        from engine.llm import Completion
+        import json
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return Completion(json.dumps(reply), "fake", 0.01, 10, 10)
+
+
+def _reply(spec=None, questions=()):
+    return {"spec": spec, "assumptions": ["Asia low = the Asia session low"], "questions": list(questions),
+            "unsupported": []}
+
+
+@pytest.fixture
+def use_llm(monkeypatch):
+    def install(*replies):
+        monkeypatch.setattr(services, "llm", lambda: ScriptedLLM(*replies))
+    return install
+
+
+@pytest.mark.django_db
+def test_parse_says_which_trial_the_spec_would_be(client, project, use_llm):
+    pid = project["id"]
+    use_llm(_reply(spec_without_fixed_fields()))
+    r = client.post(f"/api/projects/{pid}/parse", {"prompt": "the FVG demo"}, format="json")
+    assert r.status_code == 200, r.content
+    body = r.json()
+    assert body["status"] == "ready" and body["spec"]["timeframe"] == "5m" and body["trial"] == {"existing": None, "next": 1}
+    assert "Long US100 on 5-minute bars." in body["card"]["text"] and body["defaults"]
+    assert body["attempts"] == [{"error": None, "seconds": 0.01, "tokens": 20}]  # no raw model text to the client
+
+    t1 = client.post(f"/api/projects/{pid}/trials", {"spec": body["spec"]}, format="json").json()
+    assert t1["spec_hash"] == body["spec_hash"]
+    use_llm(_reply(spec_without_fixed_fields()))
+    again = client.post(f"/api/projects/{pid}/parse", {"prompt": "the FVG demo"}, format="json").json()
+    assert again["trial"] == {"existing": 1, "next": 2}
+
+
+@pytest.mark.django_db
+def test_parse_questions_and_answers(client, project, use_llm):
+    partial = {k: v for k, v in spec_without_fixed_fields().items() if k != "stop"}
+    use_llm(_reply(partial, questions=["Where is your stop?"]))
+    body = client.post(f"/api/projects/{project['id']}/parse", {"prompt": "FVG"}, format="json").json()
+    assert body["status"] == "questions" and body["questions"] == ["Where is your stop?"] and "trial" not in body
+    use_llm(_reply(spec_without_fixed_fields()))
+    r = client.post(f"/api/projects/{project['id']}/parse",
+                    {"prompt": "FVG", "answers": [{"question": "Where is your stop?", "answer": "under the swing low"}]},
+                    format="json")
+    assert r.json()["status"] == "ready"
+
+
+@pytest.mark.django_db
+def test_parse_input_and_model_failures(client, project, use_llm, monkeypatch):
+    from engine.llm import LLMError, LLMNotConfigured
+    url = f"/api/projects/{project['id']}/parse"
+    assert client.post(url, {"prompt": " "}, format="json").status_code == 400
+    assert client.post(url, {"prompt": "x" * 4001}, format="json").status_code == 400
+    assert client.post(url, {"prompt": "FVG", "answers": ["stop 10"]}, format="json").status_code == 400
+    assert client.post("/api/projects/999/parse", {"prompt": "FVG"}, format="json").status_code == 404
+    use_llm(LLMError("timeout"))
+    assert client.post(url, {"prompt": "FVG"}, format="json").status_code == 502
+
+    def no_key():
+        raise LLMNotConfigured("NEBIUS_API_KEY is not set")
+    monkeypatch.setattr(services, "llm", no_key)
+    r = client.post(url, {"prompt": "FVG"}, format="json")
+    assert r.status_code == 503 and "NEBIUS" not in r.json()["error"]  # configuration details stay in the log
+
+
+@pytest.mark.django_db
+def test_check_previews_an_edit_without_running_it(client, project):
+    pid = project["id"]
+    url = f"/api/projects/{pid}/check"
+    r = client.post(url, {"spec": spec_without_fixed_fields()}, format="json")
+    assert r.status_code == 200 and r.json()["trial"] == {"existing": None, "next": 1}
+    assert r.json()["card"]["sections"]["target"].startswith("2R") and r.json()["spec"]["instrument"] == "US100"
+    t1 = client.post(f"/api/projects/{pid}/trials", {"spec": r.json()["spec"]}, format="json").json()
+    assert client.post(url, {"spec": t1["spec"]}, format="json").json()["trial"] == {"existing": 1, "next": 2}
+    edited = copy.deepcopy(t1["spec"])
+    edited["target"]["r"] = 2.5
+    assert client.post(url, {"spec": edited}, format="json").json()["trial"] == {"existing": None, "next": 2}
+    edited["target"]["r"] = 0
+    bad = client.post(url, {"spec": edited}, format="json")
+    assert bad.status_code == 400 and bad.json()["path"] == "" and "target" in bad.json()["error"]
+    assert client.get(f"/api/projects/{pid}").json()["trial_count"] == 1  # checking never counts
+
+
+@pytest.mark.django_db
+def test_seed_demo_builds_a_read_only_demo(client):
+    from django.core.management import call_command
+    assert client.get("/api/demo").status_code == 404
+    call_command("seed_demo", verbosity=0)
+    demo = client.get("/api/demo").json()
+    assert demo["is_demo"] and demo["exam_used"] and demo["trial_count"] == 3
+    history = client.get(f"/api/projects/{demo['id']}/trials").json()
+    assert [h["stage"] for h in history].count("development") == 3 and history[-1]["stage"] == "holdout"
+    assert client.post(f"/api/projects/{demo['id']}/trials", {"spec": spec_without_fixed_fields()},
+                       format="json").status_code == 409
+    call_command("seed_demo", verbosity=0)  # a second run keeps the existing demo
+    assert client.get("/api/demo").json()["id"] == demo["id"]
+    call_command("seed_demo", replace=True, verbosity=0)
+    assert client.get("/api/demo").json()["id"] != demo["id"]

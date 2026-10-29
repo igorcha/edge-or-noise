@@ -8,6 +8,8 @@ dependencies = [
     "pyarrow>=20",
     "pydantic>=2",
     "numba>=0.61",
+    "openai>=1.50",  # Nemotron on Nebius Token Factory (OpenAI-compatible API)
+    "anthropic>=0.70",  # Claude, the swappable alternative (LLM_PROVIDER=anthropic)
 ]
 
 [project.optional-dependencies]
@@ -26,3 +28,5 @@ include = ["engine*"]
 testpaths = ["engine/tests", "api/backtests/tests"]
 pythonpath = [".", "api"]
 DJANGO_SETTINGS_MODULE = "config.settings"
+markers = ["network: calls the live LLM; opt in with `pytest -m network` (needs NEBIUS_API_KEY)"]
+addopts = "-m 'not network'"

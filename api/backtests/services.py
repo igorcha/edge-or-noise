@@ -8,7 +8,9 @@ from django.conf import settings
 
 from engine.honest import Dataset, baseline, cost_stress, load_dev, load_exam, run_trial, verdict
 from engine.honest.trial import Trial as EngineTrial
-from engine.spec import Strategy, canonical_dict
+from engine.llm import LLM, READY, make_llm
+from engine.llm import parse as llm_parse
+from engine.spec import Strategy, canonical_dict, spec_hash, validate_spec
 from engine.spec.card import render_card
 
 
@@ -19,6 +21,30 @@ def dataset(instrument: str, timeframe: str) -> Dataset:
 
 def exam_dataset(instrument: str, timeframe: str) -> Dataset:
     return load_exam(instrument, timeframe)
+
+
+@lru_cache(maxsize=1)
+def llm() -> LLM:
+    return make_llm()  # raises LLMNotConfigured without a key; not cached then, so a key added later works
+
+
+def parse(prompt: str, instrument: str, timeframe: str, answers: list[dict], known: dict[str, int],
+          next_number: int) -> dict:
+    """The parse result for the UI; a ready one carries its preview (see `preview`)."""
+    r = llm_parse(prompt, instrument, timeframe, llm(), answers)
+    out = r.to_json()
+    out["attempts"] = [{k: a[k] for k in ("error", "seconds", "tokens")} for a in out["attempts"]]
+    if r.status == READY:
+        out.update(preview(validate_spec(r.spec), known, next_number))
+    return out
+
+
+def preview(spec: Strategy, known: dict[str, int], next_number: int) -> dict:
+    """What the UI shows before a run: the canonical spec, its rules card, and whether running it is a
+    new trial or one already run. `known` maps the project's development spec hashes to trial numbers."""
+    h = spec_hash(spec)
+    return {"spec": canonical_dict(spec), "spec_hash": h, "card": render_card(spec),
+            "trial": {"existing": known.get(h), "next": next_number}}
 
 
 def run(spec: Strategy, ds: Dataset, n_trials: int, prior_sharpes: list[float]) -> dict:

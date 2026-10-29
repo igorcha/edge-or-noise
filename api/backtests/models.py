@@ -37,7 +37,7 @@ class Trial(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["number", "id"]
+        ordering = ["id"]  # creation order: the exam reuses its trial's number but comes last
         constraints = [models.UniqueConstraint(fields=["project", "spec_hash", "stage"], name="one_run_per_spec_and_stage")]
 
     def __str__(self) -> str:

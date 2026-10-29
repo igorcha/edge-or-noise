@@ -1,0 +1,93 @@
+/* Base ---------------------------------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: none; box-shadow: var(--focus); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+h1, h2, h3, h4, p { margin: 0; }
+
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-2); }
+.faint { color: var(--text-3); }
+.pos { color: var(--pos); }
+.neg { color: var(--neg); }
+.warn { color: var(--warn); }
+.eyebrow {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* Buttons -------------------------------------------------------------------------------------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
+  height: 34px; padding: 0 var(--sp-4);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--text);
+  font-size: var(--fs-md); font-weight: 550; cursor: pointer; white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s;
+}
+.btn:hover:not(:disabled) { background: var(--surface-3); border-color: var(--text-3); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn-primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-ghost { background: transparent; border-color: transparent; color: var(--text-2); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface-2); border-color: transparent; color: var(--text); }
+.btn-lg { height: 42px; font-size: var(--fs-base); padding: 0 var(--sp-5); }
+.btn-block { width: 100%; }
+
+/* Badges ---------------------------------------------------------------------------------------- */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 var(--sp-2);
+  border-radius: 999px; border: 1px solid var(--border-strong);
+  font-size: var(--fs-sm); font-weight: 550; color: var(--text-2); white-space: nowrap;
+}
+.badge .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.badge-pos { color: var(--pos); background: var(--pos-bg); border-color: transparent; }
+.badge-neg { color: var(--neg); background: var(--neg-bg); border-color: transparent; }
+.badge-warn { color: var(--warn); background: var(--warn-bg); border-color: transparent; }
+.badge-accent { color: var(--accent); background: var(--accent-bg); border-color: transparent; }
+
+/* Inputs ----------------------------------------------------------------------------------------- */
+.input, .select, .textarea {
+  width: 100%; height: 30px; padding: 0 var(--sp-2);
+  background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+}
+.input:hover, .select:hover, .textarea:hover { border-color: var(--text-3); }
+.input.num { text-align: right; }
+.textarea { height: auto; min-height: 96px; padding: var(--sp-2) var(--sp-3); resize: vertical; line-height: 1.5; }
+.input-invalid { border-color: var(--neg); }
+.field-label { font-size: var(--fs-sm); color: var(--text-2); }
+
+/* Surfaces --------------------------------------------------------------------------------------- */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.card-pad { padding: var(--sp-5); }
+.divider { height: 1px; background: var(--border); border: 0; margin: 0; }
+
+.spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid currentColor; border-right-color: transparent;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.notice {
+  padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-sm);
+  font-size: var(--fs-md); background: var(--surface-2); color: var(--text-2);
+}
+.notice-neg { background: var(--neg-bg); color: var(--neg); }
+.notice-warn { background: var(--warn-bg); color: var(--warn); }

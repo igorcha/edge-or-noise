@@ -42,6 +42,16 @@ UNSUPPORTED = {
     "harmonic_patterns": "not supported yet",
     "wyckoff_phases": "phases are subjective, no mechanical definition",
     "al_brooks_bar_counts": "not supported yet",
+    # on the roadmap, not built yet
+    "rsi": "not available yet",
+    "bollinger_bands": "not available yet",
+    "macd": "not available yet",
+    "stochastic": "not available yet",
+    "order_blocks": "not available yet",
+    "smt_divergence": "needs a second instrument at the same time",
+    "fibonacci_levels": "not available yet",
+    "equal_highs_lows": "not available yet",
+    "ny_midnight_open": "not available yet",
 }
 
 
@@ -73,13 +83,13 @@ def compute(name: str, bars: Bars, params: dict | None = None, **inputs) -> dict
     return spec.fn(bars, p, **inputs)
 
 
-def _strip_titles(schema):
+def strip_titles(schema):
     """Drop pydantic's generated "title" keys, which are noise in the LLM prompt."""
     if isinstance(schema, dict):
-        return {k: ({name: _strip_titles(f) for name, f in v.items()} if k == "properties" else _strip_titles(v))
+        return {k: ({name: strip_titles(f) for name, f in v.items()} if k == "properties" else strip_titles(v))
                 for k, v in schema.items() if k != "title"}
     if isinstance(schema, list):
-        return [_strip_titles(v) for v in schema]
+        return [strip_titles(v) for v in schema]
     return schema
 
 
@@ -90,7 +100,7 @@ def catalog() -> dict:
                 "name": s.name,
                 "description": s.description,
                 "aliases": list(s.aliases),
-                "params": _strip_titles(s.params.model_json_schema()),
+                "params": strip_titles(s.params.model_json_schema()),
                 "inputs": s.inputs,
                 "outputs": s.outputs,
             }
