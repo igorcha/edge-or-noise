@@ -8,7 +8,8 @@ One position (or one working order) at a time. For each signal, in bar order:
   3. stop/target are made absolute from the fill, then scanned on 1m bars:
      a bar that opens past the stop fills at its open (gap), a touch fills at the stop;
      a target needs trade-through by one tick; the stop wins when both hit on the same 1m bar;
-     on the fill bar itself only the stop can hit (worst case), never the target
+     on the fill bar itself only the stop can hit (worst case), never the target;
+     MAE/MFE count every bar while open, and the exit bar only up to the exit price
   4. an optional time stop closes at the open after `max_bars_held` strategy bars;
      a position still open at the end of data is closed at the last close ("end")
 
@@ -188,29 +189,33 @@ def scan(sig_bar, sig_entry, sig_stop_px, sig_stop_dist, sig_target_px, target_r
             sfill = fill * d
             sstp = stp * d
             stgt = tgt * d
-            if i > fi:
-                if sfill - lo > worst:
-                    worst = sfill - lo
-                if hi - sfill > best:
-                    best = hi - sfill
-                if op <= sstp:  # gapped through the stop
-                    why = STOP
-                    ei = i
-                    ex = op * d
-                    break
-            else:
-                if sfill - lo > worst:
-                    worst = sfill - lo
+            if i > fi and op <= sstp:  # gapped through the stop
+                why = STOP
+                ei = i
+                ex = op * d
+                break
             if lo <= sstp:  # stop touched; wins over a target on the same bar
                 why = STOP
                 ei = i
                 ex = stp
                 break
-            if i > fi and hi >= stgt + tick:
-                why = TARGET
-                ei = i
-                ex = tgt
-                break
+            if sfill - lo > worst:
+                worst = sfill - lo
+            if i > fi:
+                if hi >= stgt + tick:
+                    why = TARGET
+                    ei = i
+                    ex = tgt
+                    break
+                if hi - sfill > best:
+                    best = hi - sfill
+        if why == STOP or why == TARGET:
+            # the exit bar counts only up to the exit price: once out, the rest of the bar is not the trade's
+            move = (ex - fill) * d
+            if -move > worst:
+                worst = -move
+            if move > best:
+                best = move
         if why == STOP:
             exit_slip = slippage  # a triggered stop is a market order
         if why < 0:  # still open at the end of data

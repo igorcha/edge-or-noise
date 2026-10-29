@@ -60,7 +60,8 @@ def test_market_entry_fills_next_open_and_target_needs_trade_through():
     assert t.R == 2 and t.cost_R == 0 and t.bars_held == 0
     assert t.entry_time == m1.close_time[5] - pd.Timedelta(minutes=1) and t.exit_time == m1.close_time[9]
     assert t.signal_time == tf.close_time[0] and t.signal_bar == 0 and t.entry_bar == 1 == t.exit_bar
-    assert t.mfe_R == pytest.approx(2.1) and t.mae_R == pytest.approx(0.25)  # low 99.5 on the fill bar counts
+    assert t.mae_R == pytest.approx(0.25)  # low 99.5 on the fill bar counts
+    assert t.mfe_R == pytest.approx(2.0)  # the exit bar counts up to the 104 target, not its 104.2 high
 
 
 def test_target_touch_without_trade_through_does_not_fill():
@@ -75,6 +76,7 @@ def test_stop_wins_when_both_hit_on_one_bar():
     m1, tf = m1_bars(rows)
     t = one(simulate(sig(stop_dist=1.0, target_r=2.0), tf, m1, FREE))
     assert t.exit_reason == "stop" and t.exit == 99 and t.R == -1
+    assert t.mae_R == 1 and t.mfe_R == 0  # out at the stop: the low of 97 after it isn't the trade's
 
 
 def test_gap_through_stop_fills_at_open_and_loses_more_than_1r():
@@ -82,6 +84,7 @@ def test_gap_through_stop_fills_at_open_and_loses_more_than_1r():
     m1, tf = m1_bars(rows)
     t = one(simulate(sig(stop_dist=1.0), tf, m1, FREE))
     assert t.exit_reason == "stop" and t.exit == 97 and t.R == -3 and t.exit_m1 == 6
+    assert t.mae_R == 3  # out at the 97 open: the 96 low after it isn't the trade's
 
 
 def test_fill_bar_only_the_stop_can_hit():
@@ -179,7 +182,8 @@ def test_short_mirror_with_spread_on_the_cover():
     assert t.entry == 100 and t.stop == 101 and t.target == 98  # sold at the bid, no spread on the way in
     assert t.exit_reason == "target" and t.exit == 98 and t.exit_m1 == 7  # ask low = 96.9 + 0.1 <= 97.99
     assert t.R == 2 and t.cost_R == 0  # the spread's price was waiting for the ask to reach the target
-    assert t.mae_R == pytest.approx(0.6) and t.mfe_R == pytest.approx(3.0)  # ask high 100.6 on the fill bar
+    assert t.mae_R == pytest.approx(0.6)  # ask high 100.6 on the fill bar
+    assert t.mfe_R == pytest.approx(2.0)  # out at the 98 target: the ask low of 97 after it isn't the trade's
     costs = Costs(0.1, 0.1, slippage=0.05)
     m1, tf = m1_bars([FLAT] * 20)
     t = one(simulate(sig(direction=-1, stop_dist=1.0, max_bars_held=1), tf, m1, costs))  # time exit: cover at market
