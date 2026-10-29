@@ -7,8 +7,12 @@ forward from the bar after the signal (one position at a time, daily cap, fills,
 
 Lookahead: every block output is causal, and a signal at bar t only reads outputs at bars
 <= t (step geometry is read at the step's own bar, which is <= t). The simulator acts from
-t + 1. Prices that aren't known until the fill (ATR/tick stops, R-multiple targets) are
-expressed as distances / multiples and resolved by the simulator at fill time.
+t + 1. Prices that aren't known until the fill (ATR/points stops, R-multiple targets) are
+expressed as distances / multiples and resolved by the simulator at fill time, which also
+skips (and counts) fills where an absolute stop or target ends up on the wrong side.
+
+Unknown values (NaN, e.g. an EMA still warming up) make a comparison neither true nor false,
+so they never pass a filter, not even under `not`.
 """
 
 import json
@@ -20,9 +24,10 @@ from engine.blocks import Bars, compute
 from engine.blocks.registry import resolve
 from engine.blocks.series import atr_values
 from engine.blocks.types import LEVEL
+from engine.data.instruments import TIMEFRAMES
 from engine.spec.checks import canonicalize
 from engine.spec.models import (
-    All, AnyOf, AtrStop, BlockRef, Compare, Condition, Event, LevelStop, LevelTarget, LimitEntry, Not, Price,
+    CROSS_OPS, All, AnyOf, AtrStop, BlockRef, Compare, Condition, Event, LevelStop, LevelTarget, LimitEntry, Not, Price,
     PointsStop, PriceRef, RTarget, StepRef, Strategy,
 )
 
@@ -63,6 +68,8 @@ class Signals:
 
 def interpret(spec: Strategy, bars: Bars) -> Signals:
     spec = canonicalize(spec)
+    if bars.tf_minutes != TIMEFRAMES[spec.timeframe]:
+        raise ValueError(f"the spec is {spec.timeframe} but the bars are {bars.tf_minutes}m")
     ev = _Evaluator(bars)
     sign = 1 if spec.direction == "long" else -1
     dropped: dict[str, int] = {}
@@ -220,30 +227,44 @@ class _Evaluator:
 
     def event(self, e: BlockRef | Compare) -> np.ndarray:
         """A setup step's event: a block's event output, or a cross."""
-        return self.compare(e) if isinstance(e, Compare) else self.array(e)
+        return self.compare(e)[0] if isinstance(e, Compare) else self.array(e)
 
-    def compare(self, c: Compare) -> np.ndarray:
+    def compare(self, c: Compare) -> tuple[np.ndarray, np.ndarray]:
+        """(known true, known false) per bar; both are False where a side is NaN."""
+        n = len(self.bars)
         left, right = self.operand(c.left), self.operand(c.right)
-        with np.errstate(invalid="ignore"):  # NaN compares False: an unknown value never passes a filter
-            if c.op in ("crosses_above", "crosses_below"):
-                # above this bar and not above on the previous (closed) bar; NaN on either bar is no cross
+        known = np.broadcast_to(~(np.isnan(left) | np.isnan(right)), n)
+        with np.errstate(invalid="ignore"):
+            if c.op in CROSS_OPS:
+                # beyond on this bar and not beyond on the previous (closed) bar, both known
                 gt, le = (np.greater, np.less_equal) if c.op == "crosses_above" else (np.less, np.greater_equal)
-                now = gt(left, right)
-                before = le(left, right)
-                out = np.zeros(len(self.bars), bool)
-                out[1:] = now[1:] & before[:-1]
-                return out
-            return {">": np.greater, "<": np.less, ">=": np.greater_equal, "<=": np.less_equal}[c.op](left, right)
+                now, before = np.broadcast_to(gt(left, right), n), np.broadcast_to(le(left, right), n)
+                crossed, both_known = np.zeros(n, bool), np.zeros(n, bool)
+                crossed[1:] = now[1:] & before[:-1]
+                both_known[1:] = known[1:] & known[:-1]
+                return crossed, both_known & ~crossed
+            ops = {">": (np.greater, np.less_equal), "<": (np.less, np.greater_equal),
+                   ">=": (np.greater_equal, np.less), "<=": (np.less_equal, np.greater)}[c.op]
+            return np.broadcast_to(ops[0](left, right), n), np.broadcast_to(ops[1](left, right), n)
 
     def condition(self, c: Condition) -> np.ndarray:
+        """Bars where the condition is known to hold."""
+        return self._truth(c)[0]
+
+    def _truth(self, c: Condition) -> tuple[np.ndarray, np.ndarray]:
+        """(known true, known false) per bar. Unknown is neither, so `not` can't turn it into a pass."""
         if isinstance(c, Event):
-            return self.array(c.event)
+            e = self.array(c.event)
+            return e, ~e
         if isinstance(c, Compare):
             return self.compare(c)
-        if isinstance(c, All):
-            return np.logical_and.reduce([self.condition(x) for x in c.all])
-        if isinstance(c, AnyOf):
-            return np.logical_or.reduce([self.condition(x) for x in c.any])
+        if isinstance(c, (All, AnyOf)):
+            parts = [self._truth(x) for x in (c.all if isinstance(c, All) else c.any)]
+            trues, falses = [p[0] for p in parts], [p[1] for p in parts]
+            if isinstance(c, All):
+                return np.logical_and.reduce(trues), np.logical_or.reduce(falses)
+            return np.logical_or.reduce(trues), np.logical_and.reduce(falses)
         if isinstance(c, Not):
-            return ~self.condition(c.not_)
+            true, false = self._truth(c.not_)
+            return false, true
         raise TypeError(f"unknown condition {type(c).__name__}")

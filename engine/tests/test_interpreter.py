@@ -103,6 +103,22 @@ def test_nan_in_a_compare_is_false():
                                       {"left": {"price": "close"}, "op": ">", "right": 1}]}])) == 1
 
 
+@pytest.mark.parametrize("cond", [
+    {"not": {"left": {"price": "close"}, "op": ">=", "right": {"block": "ema", "params": {"length": 50}}}},
+    {"not": {"all": [{"left": {"price": "close"}, "op": ">", "right": 1},
+                     {"left": {"price": "close"}, "op": ">", "right": {"block": "ema", "params": {"length": 50}}}]}},
+    {"not": {"left": {"price": "close"}, "op": "crosses_above", "right": {"block": "ema", "params": {"length": 50}}}},
+])
+def test_not_of_an_unknown_value_is_still_unknown(cond):
+    assert len(run(filters=[cond])) == 0  # EMA 50 is unknown on all 7 bars
+    assert len(run(filters=[{"not": {"left": {"price": "close"}, "op": ">", "right": 200}}])) == 1  # known: passes
+
+
+def test_spec_and_bars_must_have_the_same_timeframe():
+    with pytest.raises(ValueError, match="15m"):
+        interpret(validate_spec({**BASE, "timeframe": "15m"}), bars_from(ROWS))
+
+
 # --- relative stops and targets, market entry -------------------------------------------------
 
 def test_market_entry_with_atr_stop_and_level_target():
@@ -196,7 +212,9 @@ def test_examples_truncation(bars, name):
     spec = validate_spec({**EXAMPLES[name], "timeframe": "5m"})
     full = interpret(spec, bars)
     rng = np.random.default_rng(zlib.crc32(name.encode()))
-    for t in np.r_[rng.integers(0, len(bars), 20), len(bars) - 1]:
+    # signal and step bars too: a signal stamped or priced a bar early shows exactly when cut there
+    marks = np.unique(np.r_[full.bar, *full.steps.values()]) if len(full) else np.array([], int)
+    for t in np.r_[rng.integers(0, len(bars), 20), len(bars) - 1, rng.choice(marks, min(20, len(marks)), replace=False)]:
         part = interpret(spec, bars.head(t + 1))
         want = full.take(full.bar <= t)
         assert part.bar.tolist() == want.bar.tolist(), f"t={t}"

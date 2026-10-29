@@ -7,7 +7,8 @@ chart) reads only it. One row per filled trade:
     signal_time      close of the signal bar (decision time)
     entry_time       open of the 1m bar the entry filled on
     exit_time        close of the 1m bar the exit filled on
-    entry, exit      chart (bid) prices of the fills
+    entry, exit      fill prices: the bid open for market fills (spread charged in cost_R),
+                     the order's own price for limits, stops and targets
     stop, target     absolute prices used
     exit_reason      stop | target | time | end
     R                signed (exit - entry) / risk - cost_R

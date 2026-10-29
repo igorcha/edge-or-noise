@@ -23,6 +23,6 @@ class CostStress:
 
 def cost_stress(spec: Strategy, ds: Dataset, base: Trial | None = None, factor: float = COST_FACTOR) -> CostStress:
     base = base if base is not None else run_trial(spec, ds)
-    stressed = run_trial(spec, ds, costs=ds.costs.scaled(factor))
+    stressed = run_trial(spec, ds, cost_factor=factor)  # spread, commission and the spec's slippage, all scaled
     b, s = base.metrics["expectancy_R"], stressed.metrics["expectancy_R"]
     return CostStress(factor, b, s, (s > 0) if s is not None else None, stressed.metrics)

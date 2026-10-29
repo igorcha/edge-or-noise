@@ -13,7 +13,8 @@ holdout has been used. Four ingredients:
                         would exclude zero
 
 Labels:
-  promising       interval above zero, beat >= 95% of the baseline, DSR >= 0.95
+  promising       interval above zero, beat >= 95% of the baseline, DSR >= 0.95 (all three must
+                  exist: without a baseline or a DSR nothing is called promising)
   probably noise  n >= MIN_TRADES and (expectancy <= 0, or beat < 50% of the baseline, or DSR < 0.5)
   can't tell yet  everything else, which is where most strategies with few trades live
 """
@@ -69,7 +70,7 @@ def verdict(trial: Trial, base: Baseline | None, n_trials: int, trial_sharpes: l
     se = sd / math.sqrt(n) if sd > 0 else 0.0
     ci = (mean - Z95 * se, mean + Z95 * se)
     sharpe = mean / sd if sd > 0 else None
-    sr0 = expected_max_sharpe(trial_sharpes if trial_sharpes else [sharpe or 0.0], n_trials)
+    sr0 = expected_max_sharpe(trial_sharpes if trial_sharpes else [sharpe or 0.0], n_trials, n)
     dsr = deflated_sharpe(r, sr0) if sharpe is not None else None
 
     beaten = base.beaten if base is not None else None
@@ -90,7 +91,9 @@ def verdict(trial: Trial, base: Baseline | None, n_trials: int, trial_sharpes: l
         reasons.append(f"about {trades_needed} more trades needed for the interval to exclude zero")
 
     noise = mean <= 0 or (beaten is not None and beaten < 0.5) or (dsr is not None and dsr < 0.5)
-    strong = ci[0] > 0 and (beaten is None or beaten >= 0.95) and (dsr is None or dsr >= 0.95)
+    strong = ci[0] > 0 and beaten is not None and beaten >= 0.95 and dsr is not None and dsr >= 0.95
+    if base is None:
+        reasons.append("no random baseline: can't be called promising")
     if n >= MIN_TRADES and noise:
         label = "probably noise"
     elif strong and n >= MIN_TRADES:
@@ -102,13 +105,19 @@ def verdict(trial: Trial, base: Baseline | None, n_trials: int, trial_sharpes: l
     return Verdict(label, stage, n, n_trials, mean, ci, se, beaten, edge, sharpe, sr0, dsr, trades_needed, reasons)
 
 
-def expected_max_sharpe(trial_sharpes: list[float], n_trials: int) -> float:
+def expected_max_sharpe(trial_sharpes: list[float], n_trials: int, n_trades: int | None = None) -> float:
     """E[max SR] of n_trials tries whose true SR is zero and whose estimates vary like the trials seen so far.
-    With one trial, or no spread between trials, nothing is deflated."""
+    With one trial, or no spread between trials, nothing is deflated. If there are several trials
+    but fewer than two Sharpes to measure their spread (earlier trials had too few trades), the
+    spread of a no-edge Sharpe over `n_trades` trades, 1 / (n - 1), stands in, so deflation
+    never silently switches off."""
     n_trials = max(n_trials, len(trial_sharpes))
     if n_trials < 2:
         return 0.0
-    var = float(np.var(np.asarray(trial_sharpes, np.float64), ddof=1)) if len(trial_sharpes) >= 2 else 0.0
+    if len(trial_sharpes) >= 2:
+        var = float(np.var(np.asarray(trial_sharpes, np.float64), ddof=1))
+    else:
+        var = 1.0 / (n_trades - 1) if n_trades and n_trades > 1 else 0.0
     if var <= 0:
         return 0.0
     return math.sqrt(var) * ((1 - EULER_GAMMA) * _N.inv_cdf(1 - 1 / n_trials)
