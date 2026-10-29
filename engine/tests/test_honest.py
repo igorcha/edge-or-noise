@@ -60,6 +60,13 @@ def test_spec_slippage_overrides_dataset_costs(spec, ds):
     assert slipped.metrics["expectancy_R"] < cheap.metrics["expectancy_R"]
 
 
+def test_cost_stress_scales_the_spec_slippage_too(ds):
+    spec = validate_spec({**FVG_LONG, "slippage_pts": 0.5})
+    assert run_trial(spec, ds).costs.slippage == 0.5
+    stressed = run_trial(spec, ds, cost_factor=1.5).costs
+    assert stressed.slippage == pytest.approx(0.75) and stressed.spread_rth == pytest.approx(COSTS.spread_rth * 1.5)
+
+
 def test_trial_refuses_wrong_dataset(spec, ds):
     with pytest.raises(ValueError):
         run_trial(validate_spec({**FVG_LONG, "timeframe": "15m"}), ds)
@@ -106,6 +113,14 @@ def test_baseline_is_matched_to_the_strategy(trial, ds):
     assert base.expectancy_pct["p5"] <= base.expectancy_pct["p50"] <= base.expectancy_pct["p95"]
     j = base.to_json()
     assert set(j["curves"]) == {"p5", "p50", "p95"}
+
+
+def test_baseline_pays_what_the_strategy_paid(trial, ds):
+    """Same seed, same random entries: only the costs differ, so more slippage must cost the baseline."""
+    from dataclasses import replace
+    pricier = replace(trial, costs=replace(trial.costs, slippage=5.0))
+    assert baseline(pricier, ds, n_runs=10, seed=5).expectancy_pct["p50"] < \
+        baseline(trial, ds, n_runs=10, seed=5).expectancy_pct["p50"]
 
 
 def test_baseline_is_deterministic_per_seed(trial, ds):
@@ -172,6 +187,21 @@ def test_many_trials_deflate_the_verdict():
     assert many.expected_max_sharpe > one.expected_max_sharpe == 0
     assert many.deflated_sharpe < one.deflated_sharpe
     assert one.label == "promising" and many.label != "promising"
+
+
+def test_no_baseline_is_never_promising():
+    r = np.random.default_rng(0).normal(0.8, 1.0, 200)
+    assert verdict(fake_trial(r), fake_base(0.99), n_trials=1).label == "promising"
+    v = verdict(fake_trial(r), None, n_trials=1)
+    assert v.label == "can't tell yet" and any("no random baseline" in s for s in v.reasons)
+
+
+def test_deflation_never_switches_off_with_many_trials():
+    r = np.random.default_rng(4).normal(0.25, 1.0, 120)
+    alone = verdict(fake_trial(r), fake_base(0.97), n_trials=1)
+    # 10 trials, but only this one had enough trades for a Sharpe: still deflated
+    many = verdict(fake_trial(r), fake_base(0.97), n_trials=10, trial_sharpes=[alone.sharpe_per_trade])
+    assert many.expected_max_sharpe > 0 and many.deflated_sharpe < alone.deflated_sharpe
 
 
 def test_trades_needed_shrinks_with_n():

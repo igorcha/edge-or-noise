@@ -23,26 +23,31 @@ class Trial:
     trades: pd.DataFrame
     skipped: dict[str, int]
     metrics: dict
+    costs: Costs  # what this run was charged; the random baseline is charged exactly the same
 
     @property
     def n(self) -> int:
         return len(self.trades)
 
 
-def run_trial(spec: Strategy, ds: Dataset, costs: Costs | None = None) -> Trial:
+def trial_costs(spec: Strategy, ds: Dataset, factor: float = 1.0) -> Costs:
+    """The dataset's spread and commission with the spec's own slippage (it's part of the spec,
+    so part of the trial), everything times `factor` for the cost stress test."""
+    return replace(ds.costs, slippage=spec.slippage_pts).scaled(factor)
+
+
+def run_trial(spec: Strategy, ds: Dataset, cost_factor: float = 1.0) -> Trial:
     spec = canonicalize(spec)
     if spec.instrument != ds.instrument or spec.timeframe != ds.timeframe:
         raise ValueError(f"spec is for {spec.instrument} {spec.timeframe}, dataset is {ds.instrument} {ds.timeframe}")
-    costs = costs if costs is not None else ds.costs
-    if costs.slippage != spec.slippage_pts:  # slippage is part of the spec, so it's part of the trial
-        costs = replace(costs, slippage=spec.slippage_pts)
+    costs = trial_costs(spec, ds, cost_factor)
     res: Result = simulate(interpret(spec, ds.bars), ds.bars, ds.m1, costs)
     trades = res.trades
     if ds.exam:
         if ds.boundary is None:
             raise ValueError("an exam dataset needs a holdout boundary")
         trades = trades[trades["signal_time"] > ds.boundary].reset_index(drop=True)  # holdout trades only
-    return Trial(spec, spec_hash(spec), ds.stage, trades, res.skipped, metrics(trades))
+    return Trial(spec, spec_hash(spec), ds.stage, trades, res.skipped, metrics(trades), costs)
 
 
 @dataclass
