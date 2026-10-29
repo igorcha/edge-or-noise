@@ -117,7 +117,7 @@ It supports:
 - **Verdict:** probably noise / can't tell yet / promising. It reports:
   - the expectancy interval (SE = SD/√n)
   - edge over the baseline
-  - a deflated score for the effective trial count (Deflated Sharpe Ratio)
+  - a deflated score for the effective trial count (Deflated Sharpe Ratio). Development verdicts only: the holdout exam is one test of one locked spec, so it is judged undeflated (benchmark Sharpe 0) and only reports the trial count
   - how many more trades are needed
 
   It's labeled "development verdict" until the holdout is used. It judges the mechanical rules, not the trader.

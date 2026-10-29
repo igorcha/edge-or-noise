@@ -8,7 +8,9 @@ holdout has been used. Four ingredients:
                         share of random runs the strategy beat
   deflated Sharpe       Bailey & Lopez de Prado's DSR: the probability the per-trade Sharpe
                         ratio is really above the Sharpe you'd expect as the best of N trials
-                        by luck alone, with skew and kurtosis of the R distribution accounted for
+                        by luck alone, with skew and kurtosis of the R distribution accounted for.
+                        The holdout verdict isn't deflated: it's one test of one locked spec, and
+                        the choice between trials was made on other data, so the benchmark is 0
   trades needed         how many more trades, at this expectancy and SD, until the interval
                         would exclude zero
 
@@ -32,6 +34,7 @@ Z95 = 1.959963984540054
 MIN_TRADES = 30  # below this nothing is called noise, only "can't tell yet"
 EULER_GAMMA = 0.5772156649015329
 _N = NormalDist()
+HOLDOUT = "holdout"
 
 
 @dataclass(frozen=True)
@@ -57,7 +60,8 @@ class Verdict:
 
 def verdict(trial: Trial, base: Baseline | None, n_trials: int, trial_sharpes: list[float] | None = None) -> Verdict:
     """`n_trials` is the project's trial count including this one; `trial_sharpes` the per-trade
-    Sharpe of every trial so far (used for the spread of outcomes the DSR deflates by)."""
+    Sharpe of every trial so far (used for the spread of outcomes the DSR deflates by). On the
+    holdout both are only reported: the exam is never deflated."""
     r = trial.trades["R"].to_numpy(np.float64)
     n = len(r)
     stage = trial.stage
@@ -70,7 +74,10 @@ def verdict(trial: Trial, base: Baseline | None, n_trials: int, trial_sharpes: l
     se = sd / math.sqrt(n) if sd > 0 else 0.0
     ci = (mean - Z95 * se, mean + Z95 * se)
     sharpe = mean / sd if sd > 0 else None
-    sr0 = expected_max_sharpe(trial_sharpes if trial_sharpes else [sharpe or 0.0], n_trials, n)
+    if stage == HOLDOUT:  # one test on unseen data: nothing was selected on it, nothing to deflate
+        sr0 = 0.0
+    else:
+        sr0 = expected_max_sharpe(trial_sharpes if trial_sharpes else [sharpe or 0.0], n_trials, n)
     dsr = deflated_sharpe(r, sr0) if sharpe is not None else None
 
     beaten = base.beaten if base is not None else None
@@ -85,7 +92,9 @@ def verdict(trial: Trial, base: Baseline | None, n_trials: int, trial_sharpes: l
     reasons.append(f"expectancy {mean:+.2f}R, 95% interval {ci[0]:+.2f} to {ci[1]:+.2f} over {n} trades")
     if beaten is not None:
         reasons.append(f"beat {beaten:.0%} of {base.n_runs} random-entry runs")
-    if dsr is not None:
+    if dsr is not None and stage == HOLDOUT:
+        reasons.append(f"Sharpe probability {dsr:.2f} on the holdout (one test of one spec, not deflated)")
+    elif dsr is not None:
         reasons.append(f"deflated Sharpe {dsr:.2f} after {n_trials} trial{'s' if n_trials != 1 else ''}")
     if trades_needed:
         reasons.append(f"about {trades_needed} more trades needed for the interval to exclude zero")

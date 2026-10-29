@@ -21,7 +21,7 @@ def render_card(spec: Strategy) -> dict:
     spec = canonicalize(spec)
     steps = {s.name: s.event for s in spec.setup if isinstance(s.event, BlockRef)}  # a cross has no prices
     sections = {
-        "direction": f"{spec.direction.capitalize()} {spec.instrument} on {TF_NAMES.get(spec.timeframe, spec.timeframe)} bars.",
+        "direction": f"{_cap(spec.direction)} {spec.instrument} on {TF_NAMES.get(spec.timeframe, spec.timeframe)} bars.",
         "filters": _filters(spec),
         "setup": _setup(spec),
         "entry": _entry(spec, steps),
@@ -29,8 +29,13 @@ def render_card(spec: Strategy) -> dict:
         "target": _target(spec, steps),
         "limits": _limits(spec),
     }
-    text = "\n".join(f"{k.capitalize()}: {v}" for k, v in sections.items())
+    text = "\n".join(f"{_cap(k)}: {v}" for k, v in sections.items())
     return {"sections": sections, "text": text}
+
+
+def _cap(s: str) -> str:
+    """First letter up, the rest untouched (str.capitalize would turn "NY AM" into "ny am")."""
+    return s[:1].upper() + s[1:]
 
 
 # --- blocks ---------------------------------------------------------------------------------
@@ -56,7 +61,8 @@ def describe(ref: BlockRef, output: str | None = None) -> str:
             a, b = SESSIONS[p["session"]]
             return f"during the {SESSION_NAMES[p['session']]} killzone ({a}-{b} NY)"
         case "day_of_week":
-            return "on " + ", ".join(DAY_NAMES[d] for d in p["days"])
+            days = [DAY_NAMES[d] for d in p["days"]]
+            return "on " + (days[0] if len(days) == 1 else ", ".join(days[:-1]) + " or " + days[-1])
         case "window_high_low":
             if out == "updated":
                 return f"the {_window(p)} completes"
@@ -173,7 +179,7 @@ def _target(spec: Strategy, steps) -> str:
     if isinstance(t, RTarget):
         return f"{t.r:g}R (reward {t.r:g} times the risk)."
     assert isinstance(t, LevelTarget)
-    return f"{_price(t.at, steps).capitalize()}."
+    return f"{_cap(_price(t.at, steps))}."
 
 
 def _limits(spec: Strategy) -> str:

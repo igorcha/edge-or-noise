@@ -112,6 +112,7 @@ def test_bad_spec_points_at_the_field(client, project):
     r = client.post(f"/api/projects/{project['id']}/trials", {"spec": bad}, format="json")
     assert r.status_code == 400 and r.json()["path"] == "setup[1].event.params" and "max_age" in r.json()["error"]
     assert client.post(f"/api/projects/{project['id']}/trials", {"nope": 1}, format="json").status_code == 400
+    assert client.post(f"/api/projects/{project['id']}/trials", {"spec": "fvg"}, format="json").status_code == 400
     assert client.get(f"/api/projects/{project['id']}").json()["trial_count"] == 0
 
 
@@ -149,3 +150,28 @@ def test_exam_is_once_and_locks_the_project(client, project):
     assert client.post(f"/api/projects/{pid}/trials", {"spec": changed}, format="json").status_code == 409
     history = client.get(f"/api/projects/{pid}/trials").json()
     assert [h["stage"] for h in history] == ["development", "holdout"]
+
+
+@pytest.mark.django_db
+def test_exam_is_not_a_trial_and_not_deflated(client, project):
+    """The exam is one test on unseen data: it adds no trial, and the development trials don't deflate it."""
+    pid = project["id"]
+    client.post(f"/api/projects/{pid}/trials", {"spec": spec_without_fixed_fields()}, format="json")
+    changed = spec_without_fixed_fields()
+    changed["target"]["r"] = 3
+    t2 = client.post(f"/api/projects/{pid}/trials", {"spec": changed}, format="json").json()
+    assert t2["verdict"]["expected_max_sharpe"] > 0  # development trial 2 is deflated
+    assert client.post(f"/api/projects/{pid}/exam", {"trial": "abc"}, format="json").status_code == 400
+    exam = client.post(f"/api/projects/{pid}/exam", {}, format="json").json()
+    assert exam["verdict"]["n_trials"] == 2 and exam["verdict"]["expected_max_sharpe"] == 0.0
+    assert exam["project"]["trial_count"] == 2
+
+
+@pytest.mark.django_db
+def test_demo_is_read_only(client, project):
+    from backtests.models import Project
+    Project.objects.filter(pk=project["id"]).update(is_demo=True)
+    r = client.post(f"/api/projects/{project['id']}/trials", {"spec": spec_without_fixed_fields()}, format="json")
+    assert r.status_code == 409
+    assert client.post(f"/api/projects/{project['id']}/exam", {}, format="json").status_code == 409
+    assert client.get(f"/api/projects/{project['id']}").json()["trial_count"] == 0

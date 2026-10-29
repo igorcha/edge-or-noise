@@ -215,6 +215,19 @@ def test_holdout_stage_is_carried():
     assert verdict(fake_trial([1.0, -1.0, 0.5], stage="holdout"), None, 1).stage == "holdout"
 
 
+def test_holdout_is_never_deflated():
+    """The exam is one test of one locked spec: 40 development trials don't raise its bar."""
+    rng = np.random.default_rng(2)
+    r = rng.normal(0.25, 1.0, 120)
+    sharpes = list(rng.normal(0.1, 0.15, 40))
+    dev = verdict(fake_trial(r), fake_base(0.97), n_trials=40, trial_sharpes=sharpes)
+    exam = verdict(fake_trial(r, stage="holdout"), fake_base(0.97), n_trials=40, trial_sharpes=sharpes)
+    alone = verdict(fake_trial(r), fake_base(0.97), n_trials=1)
+    assert dev.expected_max_sharpe > 0 and exam.expected_max_sharpe == 0
+    assert exam.deflated_sharpe == alone.deflated_sharpe > dev.deflated_sharpe
+    assert exam.n_trials == 40 and any("not deflated" in s for s in exam.reasons)
+
+
 def test_dsr_math():
     assert expected_max_sharpe([0.1], 1) == 0 and expected_max_sharpe([0.1, 0.1], 5) == 0
     assert expected_max_sharpe([0.0, 0.2, -0.1, 0.3], 10) > expected_max_sharpe([0.0, 0.2, -0.1, 0.3], 4) > 0

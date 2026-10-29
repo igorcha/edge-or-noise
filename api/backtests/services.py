@@ -21,8 +21,9 @@ def exam_dataset(instrument: str, timeframe: str) -> Dataset:
     return load_exam(instrument, timeframe)
 
 
-def run(spec: Strategy, ds: Dataset, n_trials: int, prior_sharpes: list[float], with_stress: bool = True) -> dict:
-    """Everything one trial produces, as JSON-ready pieces."""
+def run(spec: Strategy, ds: Dataset, n_trials: int, prior_sharpes: list[float]) -> dict:
+    """Everything one trial produces, as JSON-ready pieces. The exam (an exam dataset) gets no stress
+    test, and its verdict isn't deflated: `n_trials` is only reported there."""
     trial: EngineTrial = run_trial(spec, ds)
     base = baseline(trial, ds, n_runs=settings.BASELINE_RUNS)
     sharpes = [*prior_sharpes, _sharpe(trial.metrics)]
@@ -35,7 +36,7 @@ def run(spec: Strategy, ds: Dataset, n_trials: int, prior_sharpes: list[float], 
         "metrics": trial.metrics,
         "verdict": v.to_json(),
         "baseline": base.to_json(),
-        "stress": cost_stress(spec, ds, trial).to_json() if with_stress else None,
+        "stress": None if ds.exam else cost_stress(spec, ds, trial).to_json(),
         "skipped": trial.skipped,
         "trades": trade_records(trial.trades),
     }
@@ -59,7 +60,7 @@ def trade_records(trades: pd.DataFrame) -> list[dict]:
 def bars_window(ds: Dataset, first_bar: int, last_bar: int, before: int, after: int) -> dict:
     """OHLC of strategy bars around [first_bar, last_bar]. Dev datasets hold no holdout bars, so none can leak."""
     bars = ds.bars
-    lo, hi = max(0, first_bar - before), min(len(bars), last_bar + after + 1)
+    lo, hi = max(0, first_bar - max(before, 0)), min(len(bars), last_bar + max(after, 0) + 1)
     idx = np.arange(lo, hi)
     # Lightweight Charts wants the bar's open time in epoch seconds
     close_s = bars.close_time[lo:hi].tz_convert("UTC").tz_localize(None).to_numpy().astype("datetime64[s]").astype(np.int64)

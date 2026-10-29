@@ -2,9 +2,9 @@
 
     ds = load_dev("US100", "5m")                 # holdout cut off; load_exam() is the one-time final exam
     trial = run_trial(spec, ds)                  # interpret + simulate + metrics
-    base = baseline(spec, trial, ds)             # ~1,000 random-entry runs matched to the strategy
+    base = baseline(trial, ds)                   # ~1,000 random-entry runs matched to the strategy
     v = verdict(trial, base, n_trials=ledger.count, trial_sharpes=[...])
-    s = cost_stress(spec, ds)                    # costs x1.5 rerun, not a trial
+    s = cost_stress(spec, ds, trial)             # costs x1.5 rerun, not a trial
 """
 
 from engine.honest.baseline import Baseline, baseline

@@ -102,12 +102,11 @@ class ProjectTrials(APIView):
 
     def post(self, request, pk):
         data = request.data if isinstance(request.data, dict) else {}
-        if "spec" not in data:
-            raise ParseError("body must be {spec: ...}")
+        if not isinstance(data.get("spec"), dict):
+            raise ParseError("body must be {spec: {...}}")
         with transaction.atomic():
-            p = Project.objects.select_for_update().get(pk=pk) if Project.objects.filter(pk=pk).exists() else None
-            if p is None:
-                raise NotFound("project not found")
+            p = get_object_or_404(Project.objects.select_for_update(), pk=pk)
+            _refuse_demo(p)
             if p.exam_used:
                 raise Conflict("this project took its final exam; the spec is locked. Start a new project to keep developing.")
             spec = validate_spec({**data["spec"], "instrument": p.instrument, "timeframe": p.timeframe})
@@ -131,6 +130,12 @@ class ProjectTrials(APIView):
 def _hash(spec) -> str:
     from engine.spec import spec_hash
     return spec_hash(spec)
+
+
+def _refuse_demo(p: Project) -> None:
+    """The demo is shared by every visitor: trials or an exam on it would count for all of them."""
+    if p.is_demo:
+        raise Conflict("the demo project is read-only. Start your own project to run trials.")
 
 
 class TrialDetail(APIView):
@@ -161,16 +166,19 @@ class Exam(APIView):
         data = request.data if isinstance(request.data, dict) else {}
         with transaction.atomic():
             p = get_object_or_404(Project.objects.select_for_update(), pk=pk)
+            _refuse_demo(p)
             if p.exam_used:
                 raise Conflict("the final exam has already been used for this project")
             dev = p.trials.filter(stage=Trial.DEVELOPMENT)
-            chosen = get_object_or_404(dev, pk=data["trial"]) if data.get("trial") else dev.last()
+            trial_id = data.get("trial")
+            if trial_id is not None and (not isinstance(trial_id, int) or isinstance(trial_id, bool)):
+                raise ValidationError({"trial": "must be a trial id"})
+            chosen = get_object_or_404(dev, pk=trial_id) if trial_id is not None else dev.last()
             if chosen is None:
                 raise ValidationError("run at least one trial before the exam")
             spec = validate_spec(chosen.spec)
             ds = services.exam_dataset(p.instrument, p.timeframe)
-            sharpes = [services._sharpe(t.metrics) for t in dev]
-            result = services.run(spec, ds, p.trial_count, [s for s in sharpes if s is not None], with_stress=False)
+            result = services.run(spec, ds, p.trial_count, [])  # one test on unseen data: not deflated
             t = Trial.objects.create(project=p, number=chosen.number, summary=f"final exam of trial {chosen.number}", **result)
             p.exam_used, p.locked_spec_hash = True, chosen.spec_hash
             p.save(update_fields=["exam_used", "locked_spec_hash"])
