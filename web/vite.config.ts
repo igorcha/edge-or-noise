@@ -1,7 +1,8 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// In development the API runs on Django's dev server; in production Nginx serves both from one origin.
+// In development the API runs on Django's dev server; in production Django serves both from one origin
+// (the API, and this build through WhiteNoise).
 export default defineConfig({
   plugins: [react()],
   server: {

@@ -16,7 +16,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-fetch = ["dukascopy-python>=4.0", "requests"]
+# 5.0.0 fails on import (NameError: requests); the frozen dataset was fetched with 4.0.1
+fetch = ["dukascopy-python>=4.0.1,<5", "requests"]
 dev = ["pytest>=8", "pytest-django>=4.9"]
 api = ["django>=5.1", "djangorestframework>=3.15", "psycopg[binary]>=3.2", "gunicorn>=23", "whitenoise>=6.8"]
 
