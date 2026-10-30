@@ -25,20 +25,27 @@ class SwingParams(Params):
 # A swing high is a bar whose high beats `left` bars before it and isn't exceeded by `right` bars after.
 # Use `high`/`low` as structure levels: stop placement ("stop below the last swing low"),
 # targets, sweeps of swing points, or breaks of structure (close above the last swing high).
-# `new_high`/`new_low` fire when a swing gets confirmed.
-# No lookahead: a swing exists only from its confirmation bar (pivot + `right`), never at the pivot.
+# `new_high`/`new_low` fire when a swing gets confirmed. `higher_high`, `lower_high`, `higher_low` and
+# `lower_low` fire on the same bar when the new swing is above/below the previous one of its kind:
+# market structure ("wait for a higher low, then buy"). Equal swings are neither.
+# No lookahead: a swing exists only from its confirmation bar (pivot + `right`), never at the pivot,
+# and it's compared with the swing confirmed before it.
 @block(
     "swing",
     params=SwingParams,
-    outputs={"high": LEVEL, "low": LEVEL, "new_high": EVENT, "new_low": EVENT},
-    aliases=("swing high", "swing low", "pivot", "fractal", "swing point", "structure high", "structure low"),
-    description="Most recent confirmed swing high/low price, plus events when a new swing is confirmed. "
-                "A swing is usable only `right` bars after its pivot.",
+    outputs={"high": LEVEL, "low": LEVEL, "new_high": EVENT, "new_low": EVENT,
+             "higher_high": EVENT, "lower_high": EVENT, "higher_low": EVENT, "lower_low": EVENT},
+    aliases=("swing high", "swing low", "pivot", "fractal", "swing point", "structure high", "structure low",
+             "higher low", "lower high", "higher high", "lower low", "market structure"),
+    description="Most recent confirmed swing high/low price, plus events when a new swing is confirmed, "
+                "and when it's a higher high, lower high, higher low or lower low than the previous swing "
+                "of its kind. A swing is usable only `right` bars after its pivot.",
 )
 def swing(bars: Bars, p: SwingParams) -> dict:
     n, w = len(bars), p.left + p.right + 1
     out = {"high": np.full(n, np.nan), "low": np.full(n, np.nan),
-           "new_high": np.zeros(n, bool), "new_low": np.zeros(n, bool)}
+           **{k: np.zeros(n, bool) for k in ("new_high", "new_low", "higher_high", "lower_high", "higher_low",
+                                             "lower_low")}}
     if n < w:
         return out
     confirm = np.arange(w - 1, n)  # window j covers bars j..j+w-1; its pivot is j+left
@@ -52,6 +59,11 @@ def swing(bars: Bars, p: SwingParams) -> dict:
     out["high"][confirm[is_high]] = ph[is_high]
     out["low"][confirm[is_low]] = pl[is_low]
     out["high"], out["low"] = ffill(out["high"]), ffill(out["low"])
+    prev_high, prev_low = lag(out["high"]), lag(out["low"])  # the swing before this bar's (NaN: none yet)
+    out["higher_high"] = out["new_high"] & (out["high"] > prev_high)
+    out["lower_high"] = out["new_high"] & (out["high"] < prev_high)
+    out["higher_low"] = out["new_low"] & (out["low"] > prev_low)
+    out["lower_low"] = out["new_low"] & (out["low"] < prev_low)
     return out
 
 

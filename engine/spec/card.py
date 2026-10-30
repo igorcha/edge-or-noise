@@ -68,11 +68,14 @@ def describe(ref: BlockRef, output: str | None = None) -> str:
                 return f"the {_window(p)} completes"
             return f"the {_window(p)} {out}"
         case "swing":
-            kind = "high" if out in ("high", "new_high") else "low"
+            kind = "high" if out.endswith("high") else "low"
             size = (f"{p['left']} bars each side" if p["left"] == p["right"]
                     else f"{p['left']} bars left, {p['right']} right")
             if out.startswith("new_"):
                 return f"a swing {kind} is confirmed ({size})"
+            if out != kind:
+                than = "above" if out.startswith("higher") else "below"
+                return f"a {out.replace('_', ' ')} is confirmed: a swing {kind} {than} the previous one ({size})"
             return f"the last confirmed swing {kind} ({size})"
         case "fvg":
             if out == "formed":

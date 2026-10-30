@@ -3,6 +3,7 @@ from django.urls import path
 from backtests import views
 
 urlpatterns = [
+    path("health", views.Health.as_view()),
     path("catalog", views.Catalog.as_view()),
     path("demo", views.Demo.as_view()),
     path("projects", views.Projects.as_view()),

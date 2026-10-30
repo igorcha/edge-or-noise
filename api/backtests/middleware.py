@@ -1,4 +1,4 @@
-"""Allow-any-origin CORS for the Vite dev server. Off by default; Nginx serves API and app same-origin."""
+"""Allow-any-origin CORS for the Vite dev server. Off by default: in production Django serves API and app same-origin."""
 
 from django.conf import settings
 from django.http import HttpResponse

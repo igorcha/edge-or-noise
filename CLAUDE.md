@@ -21,7 +21,7 @@ The trade log is the contract. Everything downstream only reads it.
 - `engine/`: pure Python package, no Django imports, tested with pytest. Covers data, blocks, spec, interpreter, simulator, validation, prop sim and diagnostics.
 - `api/`: Django REST. Postgres models: Project, Trial, trade logs.
 - `web/`: Vite + React + TypeScript, Lightweight Charts v5. API types are generated with drf-spectacular → openapi-typescript.
-- **Deploy:** Docker Compose (Django + Gunicorn, Postgres, Nginx serving the React build) on a Nebius AI Cloud VM.
+- **Deploy:** one Docker image on Railway (`Dockerfile`, `deploy/start.sh`, guide in `DEPLOY.md`): Gunicorn runs Django, which serves `/api` and, through WhiteNoise, the React build. Railway Postgres; the bars on a volume at `/data`. The model is Nemotron on Nebius Token Factory, which is the hackathon's Nebius requirement.
 
 **Data:** Dukascopy 1m bid and ask CFD bars for US100, US500, JP225 and XAUUSD.
 - `data/raw/<INST>/{bid,ask}/YYYY-MM.parquet`: as downloaded, indexed by bar **open** time. Never modified, and the engine never reads it.
@@ -138,13 +138,13 @@ It supports:
   - A missing required field (direction, entry, stop, target) becomes a question.
   - A missing optional field gets its pinned default, listed as an assumption.
 - Validate the output and retry once with the validator error.
-- Test `json_schema` vs `json_object` modes. `json_schema` was reported to drop string escapes on Nemotron in Sept 2026.
+- Settings, tested Oct 29: `nvidia/nemotron-3-super-120b-a12b`, `json_object` mode, thinking off. The golden eval scored 12/12 in three runs in a row, at about 1s per parse; with the two swing-structure cases added it scores 14/14 in most runs (one miss in seven runs of a case was the model asking a question of its own). `json_schema` scored 10/12 (it picked a direction instead of asking), and thinking on scored 9/12 at about 9s. Temperature 0 isn't deterministic on Token Factory, so judge a prompt change on several eval runs.
 
 **Rules card and edits:**
 - Rules card text is rendered server-side from the spec with templates. The LLM never writes it.
 - Chat edits become a JSON patch against the current spec. The diff becomes the trial's summary line.
 
-**Evaluation:** a golden eval set of 30–50 prompts with expected specs (MVP: 12, `engine/llm/golden.py`). Score every prompt change against it.
+**Evaluation:** a golden eval set of 30–50 prompts with expected specs (MVP: 14, `engine/llm/golden.py`). Score every prompt change against it.
 
 **Where it lives:** `engine/llm/`.
 - `prompt.py` builds the prompt from the catalog and spec schema.
@@ -154,6 +154,7 @@ It supports:
   - a missing direction, setup, entry, stop or target always becomes a question, never a default
   - the engine, not the model, lists the defaults it filled in
   - a keyword check catches unsupported concepts the model dropped
+  - checks against the trader's own words, because Nemotron does all of these: an entry, stop or target the trader never stated is dropped and asked; ticks/pips are always asked; both directions are asked; a multi-step setup with no time given ("then a higher low") asks how many bars each step may wait; a session, weekday or session level (Asia/London/prior day/week high or low) the trader named but the spec lacks is sent back once, then flagged; filters written on a setup step move to the top level; a price ref to a swing event (`hl.higher_low`) becomes the swing's level (`hl.low`)
 - `client.py` is the Nemotron client. It's configured by `NEBIUS_*` env vars or a gitignored `.env`.
 
 **Coach:**
@@ -206,5 +207,6 @@ It supports:
   - Web: `cd web && npm install && npm run dev`, then open http://localhost:5173; Vite proxies `/api` to :8000.
 - Demo project: `cd api && ../.venv/bin/python manage.py seed_demo [--replace]`
 - Frontend checks: `cd web && npx tsc -b && npx oxlint && npm run build`
+- Deploy: `DEPLOY.md`. A push to main redeploys on Railway; check `/api/health` afterwards.
 
 <!-- TODO: fill in real commands (tests, dev servers, data scripts, deploy) -->

@@ -1,5 +1,6 @@
 """The REST API. Runs are synchronous: a trial with its baseline takes a few seconds.
 
+    GET  /api/health                       up, database reachable, which instruments have price data
     GET  /api/catalog                      block catalog, spec schema, examples
     GET  /api/demo                         the shared read-only demo project (manage.py seed_demo)
     POST /api/projects                     {name, instrument, timeframe}
@@ -16,7 +17,7 @@
 import logging
 
 from django.conf import settings
-from django.db import transaction
+from django.db import DatabaseError, connection, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.exceptions import APIException, NotFound, ParseError, ValidationError
@@ -28,6 +29,7 @@ from rest_framework.views import exception_handler as drf_exception_handler
 from backtests import services
 from backtests.models import Project, Trial
 from engine.blocks import catalog
+from engine.data import io
 from engine.data.instruments import INSTRUMENTS, TIMEFRAMES
 from engine.llm import LLMError, LLMNotConfigured
 from engine.spec import SpecError, json_schema, validate_spec
@@ -74,6 +76,19 @@ def trial_json(t: Trial) -> dict:
 
 
 # --- views --------------------------------------------------------------------------------------
+
+class Health(APIView):
+    """For the host's health check and for a person checking a deploy. Missing price data doesn't fail
+    it: the app has to be up for the data to be uploaded to it."""
+
+    def get(self, request):
+        try:
+            connection.ensure_connection()
+        except DatabaseError:
+            return Response({"ok": False, "database": False}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+        data = {inst: (io.bars_dir(inst) / "manifest.json").is_file() for inst in sorted(INSTRUMENTS)}
+        return Response({"ok": True, "database": True, "data": data})
+
 
 class Catalog(APIView):
     def get(self, request):

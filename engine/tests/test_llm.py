@@ -11,7 +11,7 @@ from engine.llm import INVALID, QUESTIONS, READY, UNSUPPORTED_STATUS, Completion
 from engine.llm import client as client_mod
 from engine.llm.fewshots import FEWSHOTS
 from engine.llm.golden import CASES, expected_specs, score
-from engine.llm.parse import DECISIONS, extract_json, filled_defaults
+from engine.llm.parse import DECISIONS, UNIT_QUESTION, ParseResult, extract_json, filled_defaults, left_out
 from engine.llm.prompt import messages, system_prompt
 from engine.spec import validate_spec
 from engine.spec.examples import FVG_LONG
@@ -39,7 +39,11 @@ def envelope(spec=None, assumptions=(), questions=(), unsupported=()):
 
 
 FVG = strip(FVG_LONG)
-PROMPT = "NY AM, sweep of the Asia low then a bullish FVG, limit at the gap top, stop under the swing low, 2R."
+SWEEP = {**FVG, "setup": FVG["setup"][:1], "entry": {"type": "market"},  # one step: no wait to ask about
+         "stop": {"type": "level", "at": {"ref": "sweep.extreme"}}}
+WAIT = ("How many bars can each step of your setup (sweep, then gap) wait for the one before it? On 5m bars, 1 hour "
+        "is 12 bars (at most 500).")
+PROMPT = "NY AM, sweep of the Asia low then a bullish FVG within 10 candles, limit at the gap top, stop under the swing low, 2R."
 
 
 # --- prompt and few-shots ------------------------------------------------------------------------
@@ -110,6 +114,7 @@ def test_invalid_spec_is_retried_once_with_the_validator_error():
     assert r.status == READY and len(llm.sent) == 2 and len(r.attempts) == 2
     retry = llm.sent[1][-1]["content"]
     assert "setup[1].event.params" in retry and "max_age" in retry and r.attempts[0].error
+    assert "don't drop it" in retry  # Nemotron fixed an error by deleting the condition it was about
 
 
 def test_second_failure_is_invalid_with_the_error_and_no_third_call():
@@ -130,7 +135,7 @@ def test_broken_json_is_retried():
 
 def test_missing_decisions_become_questions_never_defaults():
     partial = {k: v for k, v in FVG.items() if k not in ("stop", "target")}
-    r = parse("sweep then FVG, limit at the gap top", "US100", "5m", Scripted(envelope(partial)))
+    r = parse("sweep then FVG within 10 bars, limit at the gap top", "US100", "5m", Scripted(envelope(partial)))
     assert r.status == QUESTIONS and r.spec is None and r.draft == partial
     assert r.questions == [DECISIONS["stop"][0], DECISIONS["target"][0]]
 
@@ -139,6 +144,115 @@ def test_the_models_own_questions_are_kept_and_not_doubled():
     partial = {k: v for k, v in FVG.items() if k != "stop"}
     r = parse(PROMPT, "US100", "5m", Scripted(envelope(partial, questions=["Where's your stop: swing low or ATR?"])))
     assert r.status == QUESTIONS and r.questions == ["Where's your stop: swing low or ATR?"]
+
+
+def test_no_spec_but_questions_keeps_only_the_models_questions():
+    # "buy ... target 2R" with no stop: asking "long or short?" on top would read as not listening
+    r = parse(PROMPT, "US100", "5m", Scripted(envelope(None, questions=["Where's your stop?"])))
+    assert r.status == QUESTIONS and r.questions == ["Where's your stop?"]
+    # with neither a spec nor questions, every decision is still asked
+    r = parse(PROMPT, "US100", "5m", Scripted(envelope(None)))
+    assert r.status == QUESTIONS and r.questions == [q for q, _ in DECISIONS.values()]
+
+
+def test_a_distance_in_ticks_is_asked_even_when_the_model_converted_it():
+    # Nemotron turned "40 ticks" into 1 point on a made-up tick size; the spec counts points, so ask
+    ticks = "Long on a sweep of the Asia low, market entry, stop 40 ticks, target 2R."
+    r = parse(ticks, "US100", "5m", Scripted(envelope(SWEEP, assumptions=["40 ticks is 1 point"])))
+    assert r.status == QUESTIONS and r.spec is None and r.questions == [UNIT_QUESTION.format(unit="tick")]
+    asked = envelope(None, questions=["How many points is 40 ticks?"])  # the model asked: not doubled
+    assert parse(ticks, "US100", "5m", Scripted(asked)).questions == ["How many points is 40 ticks?"]
+    answered = [{"question": UNIT_QUESTION.format(unit="tick"), "answer": "10 points"}]
+    assert parse(ticks, "US100", "5m", Scripted(envelope(SWEEP)), answers=answered).status == READY
+    assert parse(PROMPT + " Stop 20 pips.", "US100", "5m", Scripted(envelope(FVG))).questions[0].startswith(
+        "You gave a distance in pips.")
+
+
+def test_decisions_the_trader_never_stated_are_asked_not_taken_from_the_model():
+    # Nemotron answered this with a limit at the gap top, a stop at the sweep and 2R, all made up
+    vague = "Buy the fair value gap after a sweep of the Asia low."
+    guess = envelope(FVG, assumptions=["No stop was given, so the stop is at the sweep's extreme.", "Waits 10 bars."])
+    r = parse(vague, "US100", "5m", Scripted(guess))
+    assert r.status == QUESTIONS and r.questions == [DECISIONS[k][0] for k in ("entry", "stop", "target")] + [WAIT]
+    assert not {"entry", "stop", "target"} & set(r.draft) and r.assumptions == ["Waits 10 bars."]
+    answers = [{"question": DECISIONS["entry"][0], "answer": "limit at the top of the gap"},
+               {"question": DECISIONS["stop"][0], "answer": "under the swing low"},
+               {"question": DECISIONS["target"][0], "answer": "2R"},
+               {"question": WAIT, "answer": "10"}]
+    assert parse(vague, "US100", "5m", Scripted(guess), answers=answers).status == READY
+
+
+def test_both_directions_ask_which_one_even_when_the_model_picked():
+    fade = "Fade sweeps of the Asia high and low during London, stop at the sweep extreme, 2R, market entry."
+    picked = envelope(SWEEP, assumptions=["Both directions can't be one strategy, so this is the short side."])
+    r = parse(fade, "US100", "5m", Scripted(picked))
+    assert r.status == QUESTIONS and r.questions == [DECISIONS["direction"][0]] and "direction" not in r.draft
+    silent = parse(fade, "US100", "5m", Scripted(envelope(SWEEP)))  # picked a side without saying so
+    assert silent.questions == [DECISIONS["direction"][0]]
+    named = "Buy sweeps of the Asia high and low in London, market entry, stop at the sweep extreme, 2R."
+    assert parse(named, "US100", "5m", Scripted(envelope(SWEEP))).status == READY
+    answered = [{"question": DECISIONS["direction"][0], "answer": "long"}]
+    assert parse(fade, "US100", "5m", Scripted(picked), answers=answered).status == READY
+    either = "Trade the Asia sweep either direction, market entry, stop under the sweep, 2R."
+    assert parse(either, "US100", "5m", Scripted(envelope(SWEEP))).questions == [DECISIONS["direction"][0]]
+
+
+def test_a_session_or_day_the_trader_named_is_sent_back_once_then_flagged():
+    no_session = {**FVG, "filters": []}  # PROMPT says NY AM
+    llm = Scripted(envelope(no_session), envelope(FVG))
+    r = parse(PROMPT, "US100", "5m", llm)
+    assert r.status == READY and len(llm.sent) == 2 and '"NY AM" (a time_window filter)' in llm.sent[1][-1]["content"]
+    r = parse(PROMPT, "US100", "5m", Scripted(envelope(no_session), envelope(no_session)))
+    assert r.status == READY and r.assumptions == [
+        "Your words mention \"NY AM\" (a time_window filter), but these rules don't. Check the rules card."]
+    assert len(parse(PROMPT + " Not on Fridays.", "US100", "5m", Scripted(envelope(FVG), envelope(FVG))).attempts) == 2
+
+
+def test_a_session_level_the_trader_named_must_be_the_one_swept():
+    # Nemotron swept the prior day low for "the Asia low"
+    day_low = copy.deepcopy(FVG)
+    day_low["setup"][0]["event"]["inputs"]["level"]["params"] = {"window": "day"}
+    llm = Scripted(envelope(day_low), envelope(FVG))
+    assert parse(PROMPT, "US100", "5m", llm).status == READY
+    assert '"Asia low" (the asia window)' in llm.sent[1][-1]["content"]
+    london_high = "London session high sweep, short at market, stop at the sweep extreme, 2R."
+    assert not [g for g in left_out(london_high, SWEEP) if "time_window" in g]  # a level, not the killzone
+
+
+def test_a_wait_the_trader_never_gave_is_asked():
+    # "after the sweep, wait for a higher low": Nemotron waited 1, 100 or 500 bars on different runs
+    hl = "Buy after the Asia low is swept and a higher low forms. Market entry, stop under the higher low, 2R."
+    reply = envelope(FVG, assumptions=["The higher low may come any number of bars later.", "Sweep of the Asia low."])
+    r = parse(hl, "US100", "5m", Scripted(reply))
+    assert r.status == QUESTIONS and r.questions == [WAIT] and r.assumptions == ["Sweep of the Asia low."]
+    assert "1 hour is 4 bars" in parse(hl, "US100", "15m", Scripted(reply)).questions[0]
+    assert parse(hl, "US100", "5m", Scripted(reply), answers=[{"question": WAIT, "answer": "48"}]).status == READY
+    for said in ("within 2 hours", "in the next 10 candles", "30 minutes later"):
+        assert parse(f"{hl} The higher low comes {said}.", "US100", "5m", Scripted(reply)).status == READY
+    assert parse(hl, "US100", "5m", Scripted(envelope(SWEEP))).status == READY  # one step: nothing to wait for
+
+
+def test_a_stop_at_a_swing_event_is_the_price_of_that_swing():
+    hl = {"direction": "long",
+          "setup": [SWEEP["setup"][0], {"name": "hl", "within": 24, "event": {"block": "swing", "output": "higher_low"}}],
+          "entry": {"type": "market"}, "stop": {"type": "level", "at": {"ref": "hl.higher_low"}, "buffer_pts": 2},
+          "target": {"type": "r_multiple", "r": 2}}
+    words = "After the Asia low sweep, buy a higher low within 2 hours at market, stop 2 points under it, 2R."
+    llm = Scripted(envelope(hl))
+    r = parse(words, "US100", "5m", llm)
+    assert r.status == READY and len(llm.sent) == 1
+    assert r.spec["stop"]["at"] == {"ref": "hl.low"} and r.spec["stop"]["buffer_pts"] == 2
+
+
+def test_conditions_written_on_a_setup_step_move_to_the_filters():
+    on_last = copy.deepcopy(FVG)
+    on_last["setup"][-1]["filters"] = on_last.pop("filters")
+    r = parse(PROMPT, "US100", "5m", Scripted(envelope(on_last)))
+    assert r.status == READY and r.spec == expected_spec(FVG, "5m") and r.assumptions == []
+    on_first = copy.deepcopy(FVG)
+    on_first["setup"][0]["filters"] = on_first.pop("filters")  # checked on the signal bar instead: said so
+    r = parse(PROMPT, "US100", "5m", Scripted(envelope(on_first)))
+    assert r.status == READY and r.spec == expected_spec(FVG, "5m") and "signal bar" in r.assumptions[0]
 
 
 def test_questions_block_a_complete_spec():
@@ -210,7 +324,7 @@ def test_golden_scoring_rejects_a_wrong_answer():
     passed, why = score(case, parse(case.prompt, "US100", case.timeframe, Scripted(envelope(wrong))))
     assert not passed and why == "differs in target"
     runs_anyway = next(c for c in CASES if c.name == "missing_entry_stop_target")
-    passed, why = score(runs_anyway, parse(runs_anyway.prompt, "US100", "5m", Scripted(envelope(FVG))))
+    passed, why = score(runs_anyway, ParseResult(READY, spec=expected_spec(FVG, "5m")))
     assert not passed and why.startswith("status ready")
 
 

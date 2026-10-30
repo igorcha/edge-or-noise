@@ -133,6 +133,16 @@ def test_swing_confirmed_after_right_bars():
     assert not out["new_low"].any()
 
 
+
+def test_swing_higher_and_lower_compare_with_the_previous_swing():
+    lows = [9, 8, 5, 8, 9, 7, 6, 7, 9, 9, 6, 9, 9, 9]  # swing lows 5 (bar 2), 6 (bar 6), 6 (bar 10)
+    b = bars_from([(lo + 1, lo + 2, lo, lo + 1) for lo in lows])
+    out = compute("swing", b, {"left": 2, "right": 2})
+    assert np.flatnonzero(out["new_low"]).tolist() == [4, 8, 12]
+    assert np.flatnonzero(out["higher_low"]).tolist() == [8]  # 6 > 5, known when 6 is confirmed
+    assert not out["lower_low"].any()  # the first swing has nothing to compare with; 6 = 6 is neither
+    assert not (out["higher_high"] | out["lower_high"]).any()
+
 # --- fvg ---------------------------------------------------------------------------------
 
 FVG_ROWS = [

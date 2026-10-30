@@ -1,0 +1,13 @@
+# Kept out of the image: secrets, local environments, build output and the price data (a volume).
+.env
+.env.*
+.git
+.venv
+**/__pycache__
+**/.pytest_cache
+*.egg-info
+data/
+web/node_modules
+web/dist
+api/.vite
+**/.DS_Store

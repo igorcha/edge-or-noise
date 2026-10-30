@@ -54,6 +54,29 @@ def spec_without_fixed_fields():
 
 
 @pytest.mark.django_db
+@pytest.mark.django_db
+def test_health_reports_the_database_and_which_instruments_have_data(client, monkeypatch, tmp_path):
+    (tmp_path / "bars" / "US100").mkdir(parents=True)
+    (tmp_path / "bars" / "US100" / "manifest.json").write_text("{}")
+    monkeypatch.setenv("BACKTESTER_DATA_DIR", str(tmp_path))
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] and body["database"] and body["data"]["US100"] is True
+    assert not any(v for k, v in body["data"].items() if k != "US100")
+
+
+def test_database_url_is_read_like_railway_writes_it():
+    from config.env import database_from_url
+
+    db = database_from_url("postgresql://postgres:p%40ss@postgres.railway.internal:5432/railway")
+    assert (db["HOST"], db["PORT"], db["NAME"], db["USER"], db["PASSWORD"]) == (
+        "postgres.railway.internal", "5432", "railway", "postgres", "p@ss")
+    assert database_from_url("postgres://u:p@db/x")["PORT"] == "5432"
+    with pytest.raises(ValueError):
+        database_from_url("mysql://u:p@db/x")
+
+
 def test_catalog(client):
     r = client.get("/api/catalog").json()
     assert {b["name"] for b in r["catalog"]["blocks"]} >= {"fvg", "sweep", "swing"}
@@ -206,11 +229,15 @@ def use_llm(monkeypatch):
     return install
 
 
+# states entry, stop and target: the parser only takes decisions the trader's words contain
+FVG_PROMPT = "Buy the FVG within 10 bars of the Asia sweep, limit at the gap top, stop under the swing low, 2R."
+
+
 @pytest.mark.django_db
 def test_parse_says_which_trial_the_spec_would_be(client, project, use_llm):
     pid = project["id"]
     use_llm(_reply(spec_without_fixed_fields()))
-    r = client.post(f"/api/projects/{pid}/parse", {"prompt": "the FVG demo"}, format="json")
+    r = client.post(f"/api/projects/{pid}/parse", {"prompt": FVG_PROMPT}, format="json")
     assert r.status_code == 200, r.content
     body = r.json()
     assert body["status"] == "ready" and body["spec"]["timeframe"] == "5m" and body["trial"] == {"existing": None, "next": 1}
@@ -220,7 +247,7 @@ def test_parse_says_which_trial_the_spec_would_be(client, project, use_llm):
     t1 = client.post(f"/api/projects/{pid}/trials", {"spec": body["spec"]}, format="json").json()
     assert t1["spec_hash"] == body["spec_hash"]
     use_llm(_reply(spec_without_fixed_fields()))
-    again = client.post(f"/api/projects/{pid}/parse", {"prompt": "the FVG demo"}, format="json").json()
+    again = client.post(f"/api/projects/{pid}/parse", {"prompt": FVG_PROMPT}, format="json").json()
     assert again["trial"] == {"existing": 1, "next": 2}
 
 
@@ -228,11 +255,12 @@ def test_parse_says_which_trial_the_spec_would_be(client, project, use_llm):
 def test_parse_questions_and_answers(client, project, use_llm):
     partial = {k: v for k, v in spec_without_fixed_fields().items() if k != "stop"}
     use_llm(_reply(partial, questions=["Where is your stop?"]))
-    body = client.post(f"/api/projects/{project['id']}/parse", {"prompt": "FVG"}, format="json").json()
+    no_stop = "Buy the FVG within 10 bars of the Asia sweep, limit at the gap top, 2R."
+    body = client.post(f"/api/projects/{project['id']}/parse", {"prompt": no_stop}, format="json").json()
     assert body["status"] == "questions" and body["questions"] == ["Where is your stop?"] and "trial" not in body
     use_llm(_reply(spec_without_fixed_fields()))
     r = client.post(f"/api/projects/{project['id']}/parse",
-                    {"prompt": "FVG", "answers": [{"question": "Where is your stop?", "answer": "under the swing low"}]},
+                    {"prompt": no_stop, "answers": [{"question": "Where is your stop?", "answer": "under the swing low"}]},
                     format="json")
     assert r.json()["status"] == "ready"
 

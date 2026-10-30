@@ -41,6 +41,7 @@ The spec:
 - "setup" is the sequence of events that triggers a trade. Every step after the first has "within":
   how many bars after the previous step it must happen. The trade signal is the last step's bar.
 - "filters" must all hold on the signal bar. Use {"all": [...]}, {"any": [...]}, {"not": ...} to combine.
+  A setup step is only {"name", "event", "within"}: a session, day or trend condition goes in "filters".
 - A price from the setup's own geometry is {"ref": "<step name>.<output>"}, like "gap.top" or
   "sweep.extreme" (the sweep candle's extreme). A block level is the block itself, like the last swing low.
 - A comparison is {"left": ..., "op": ..., "right": ...} with op one of > < >= <= crosses_above crosses_below.
@@ -60,7 +61,9 @@ the NY AM killzone", "a 30 point target with a 15 point stop is 2R"). Don't list
 
 "questions": only when direction, entry, stop or target is missing, or something is genuinely
 ambiguous (both directions, distances in ticks or pips, a level that could mean two things). Short,
-one per question, offering the options the spec supports. Keep the rest of the spec you're sure of.
+one per question, offering the options the spec supports. When you ask, still return the spec with
+everything the trader did state (direction, filters, setup, entry, stop, target) and leave out only
+what you're asking about: the trader sees which parts you understood.
 Only ask when the answer would change the spec. If the spec can only express the trader's words one
 way (filters are checked on the signal bar, not on earlier steps), use it and say so in "assumptions".
 

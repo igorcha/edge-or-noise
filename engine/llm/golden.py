@@ -131,6 +131,20 @@ CASES = [
                 "stop": {"type": "atr", "multiple": 1}, "target": {"type": "r_multiple", "r": 2}}
                for days in ({"not": {"event": {"block": "day_of_week", "params": {"days": ["fri"]}}}},
                             {"event": {"block": "day_of_week", "params": {"days": ["mon", "tue", "wed", "thu"]}}}))),
+    Case("higher_low_after_asia_sweep", "5m",
+         "After price sweeps the Asia low, buy when a higher low is confirmed within 2 hours. Market entry, stop 2 "
+         "points below the higher low, target 2R.",
+         (READY,),
+         ({"direction": "long",
+           "setup": [{"name": "sweep", "event": _sweep("low", _window("asia", "low"))},
+                     {"name": "hl", "within": 24, "event": {"block": "swing", "output": "higher_low"}}],
+           "entry": {"type": "market"},
+           "stop": {"type": "level", "at": {"ref": "hl.low"}, "buffer_pts": 2},
+           "target": {"type": "r_multiple", "r": 2}},)),
+    Case("lower_high_no_wait", "5m",
+         "Short when a lower high forms after a sweep of the prior day high. Enter at market, stop above the lower "
+         "high, 3R target.",
+         (QUESTIONS,), note="no time between the sweep and the lower high: ask, never pick 1 or 500 bars"),
     Case("missing_entry_stop_target", "5m",
          "Buy the fair value gap after a sweep of the Asia low.",
          (QUESTIONS,), note="no entry, stop or target: must ask, never invent"),

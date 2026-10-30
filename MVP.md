@@ -20,7 +20,7 @@ The full spec in `CLAUDE.md` is a 3–4 week product. Judges will see a 3-minute
 | LLM | Nemotron on Token Factory, `json_object` mode, temp 0, prompt generated from block catalog + spec schema + ~10 few-shots, envelope `{spec, assumptions, questions, unsupported}`, one retry with validator error. Golden eval: **12 prompts**, run as a pytest. **Built Oct 28** (`engine/llm/`, `POST /projects/{id}/parse`); live eval on Nemotron still to run. |
 | API | Django + DRF, Postgres via Compose. Endpoints: `POST /projects`, `POST /projects/{id}/parse`, `POST /projects/{id}/trials` (run, **synchronous**, no Celery), `GET /trials/{id}`, `GET /bars?trial&trade`, `POST /projects/{id}/exam`. Rules card text rendered server-side from the spec via templates. |
 | Frontend | **Built Oct 28** (`web/`): workspace, rules card + parameter editor (live check, "Run as trial N"), verdict card, metrics, equity vs baseline band, trade list, trade chart with FVG box, exam modal + dev/holdout comparison, demo (`manage.py seed_demo`). Untested: the prompt flow against live Nemotron. One workspace page: prompt → questions/assumptions → rules card (editable as a form over the spec; re-running creates trial N+1) → "Run as trial N" → results: verdict card, equity curve over baseline 5/50/95 band, trade list, chart window with entry/exit markers, stop/target lines, FVG box. Trial history drawer, final exam modal, demo mode (pre-loaded FVG project, no signup). |
-| Deploy | Docker Compose (Gunicorn + Postgres + Nginx serving the Vite build) on a Nebius AI Cloud VM. HTTP is fine; HTTPS only if Caddy is a 10-minute job. |
+| Deploy | **Changed Oct 29:** one Docker image on Railway (Django + Gunicorn serving the API and, via WhiteNoise, the Vite build), Railway Postgres, bars on a volume. Free HTTPS `*.up.railway.app` URL. Nemotron stays on Nebius Token Factory, which meets the "runs on Nebius" rule. See `DEPLOY.md`. |
 | Stretch (day 5 only) | **Prop sim**: 10k bootstrapped daily paths, daily loss vs MAE, pass/breach probability, median days to pass. Table output, no distribution chart. |
 
 ### Cut (say so in the README as "roadmap")
@@ -44,7 +44,7 @@ backtester/
     tests/
   api/               # Django project + app: Project, Trial models; DRF views
   web/               # Vite + React + TS + Lightweight Charts v5
-  deploy/            # docker-compose.yml, nginx.conf, Dockerfiles
+  deploy/            # start.sh (the Dockerfile is at the root, where Railway finds it)
   scripts/           # fetch_data.py, warm_numba.py, seed_demo.py
 ```
 
