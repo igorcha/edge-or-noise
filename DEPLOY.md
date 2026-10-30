@@ -100,8 +100,8 @@ only switches traffic to a new version once it answers, so a broken push never r
   redirect to `https://`.
 - **Logs:** the app's box → Deployments → View logs. Each request shows the visitor's address, the request,
   the status and how long it took.
-- **Cost:** each market's price data is loaded into memory the first time someone uses it, about 400-550MB
-  per market, so roughly 2GB once all four are in use. The app is idle most of the time and Postgres is small.
+- **Cost:** each market's price data is loaded into memory the first time someone uses it. With all four in
+  use the container held 1.44GB (measured in the Docker test, Oct 30). The app is idle most of the time and Postgres is small.
   Expect roughly $20 to $30 a month on the Hobby plan, which includes $5 of usage.
 - **Model spend:** each parse is one or two model calls, a web search up to nine. The per-visitor and global
   caps above bound it; the global daily ones are the ceiling on the bill.
