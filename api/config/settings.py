@@ -16,6 +16,8 @@
                           the same for all visitors together, default 300/hour, 1500/day, 60/hour, 200/day:
                           the ceiling on total spend (about $30/day of Nemotron and 400 Tavily credits at
                           worst-case cost per call), however many IPs call. Counters reset on redeploy.
+    RUN_RATE(_GLOBAL, _GLOBAL_DAY)        trial runs and final exams: per IP 120/hour, everyone 600/hour, 2000/day
+    PROJECT_RATE(_GLOBAL, _GLOBAL_DAY)    new projects: per IP 30/hour, everyone 200/hour, 500/day
     PROXY_HOPS            proxies in front of the app (Railway: 1), so client IPs and https are read
                           from X-Forwarded-For/-Proto; 0 (default) trusts no forwarded headers
     WEB_DIST              the built frontend (default web/dist), served at / when it exists
@@ -111,6 +113,14 @@ REST_FRAMEWORK = {
         "parse_global_day": os.environ.get("PARSE_RATE_GLOBAL_DAY", "1500/day"),
         "research_global": os.environ.get("RESEARCH_RATE_GLOBAL", "60/hour"),
         "research_global_day": os.environ.get("RESEARCH_RATE_GLOBAL_DAY", "200/day"),
+        # trial runs and final exams: about a second of CPU each, and a stored trade log
+        "run": os.environ.get("RUN_RATE", "120/hour"),
+        "run_global": os.environ.get("RUN_RATE_GLOBAL", "600/hour"),
+        "run_global_day": os.environ.get("RUN_RATE_GLOBAL_DAY", "2000/day"),
+        # new projects: a database row each
+        "project": os.environ.get("PROJECT_RATE", "30/hour"),
+        "project_global": os.environ.get("PROJECT_RATE_GLOBAL", "200/hour"),
+        "project_global_day": os.environ.get("PROJECT_RATE_GLOBAL_DAY", "500/day"),
     },
     "NUM_PROXIES": PROXY_HOPS or None,  # behind a proxy every request comes from the proxy's IP
 }

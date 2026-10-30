@@ -28,6 +28,14 @@ def _dataset(exam: bool) -> Dataset:
 
 
 @pytest.fixture(autouse=True)
+def fresh_throttles():
+    from django.core.cache import cache
+    cache.clear()  # the caps count in the process cache, which outlives a test
+    yield
+    cache.clear()
+
+
+@pytest.fixture(autouse=True)
 def synthetic_data(monkeypatch, settings, tmp_path):
     (tmp_path / "bars" / "US100").mkdir(parents=True)  # the one market with "data": its manifest exists
     (tmp_path / "bars" / "US100" / "manifest.json").write_text("{}")
@@ -383,6 +391,23 @@ def test_a_visitor_refused_per_ip_does_not_use_up_the_shared_cap(client, use_llm
         assert r.status_code == 200, "2 real searches of 5 were spent: another visitor still gets one"
     finally:
         cache.clear()
+
+
+@pytest.mark.django_db
+def test_runs_and_new_projects_are_capped_but_reading_is_not(client, project, monkeypatch):
+    from rest_framework.throttling import SimpleRateThrottle
+
+    monkeypatch.setitem(SimpleRateThrottle.THROTTLE_RATES, "run", "2/hour")
+    monkeypatch.setitem(SimpleRateThrottle.THROTTLE_RATES, "project", "1/hour")
+    url = f"/api/projects/{project['id']}/trials"
+    spec = spec_without_fixed_fields()
+    codes = [client.post(url, {"spec": {**spec, "slippage_pts": i / 10}}, format="json").status_code for i in range(3)]
+    assert codes == [201, 201, 429]
+    assert all(client.get(url).status_code == 200 for _ in range(5))  # the history stays readable
+    assert client.post(f"/api/projects/{project['id']}/exam", {}, format="json").status_code == 429  # counted with runs
+    body = {"name": "x", "instrument": "US100", "timeframe": "5m"}
+    assert [client.post("/api/projects", body, format="json", REMOTE_ADDR="10.1.1.1").status_code
+            for _ in range(2)] == [201, 429]
 
 
 @pytest.mark.django_db

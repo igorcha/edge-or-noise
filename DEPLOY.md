@@ -56,7 +56,10 @@ TAVILY_API_KEY=<your Tavily key>
   `RESEARCH_RATE_GLOBAL_DAY` (`200/day`). At worst-case cost per call that's about $30 a day of Nemotron and
   400 Tavily credits. The counters live in the app's memory: keep `WEB_CONCURRENCY` at 1 (the default), since each
   extra Gunicorn worker would get caps of its own, and a redeploy starts them from zero. The day is a rolling 24
-  hours. Set hard limits on the platforms too: a prepaid Token Factory balance with auto top-up
+  hours. Trial runs and final exams (about a second of CPU and a stored trade log each) and new projects are
+  capped the same way: `RUN_RATE` (`120/hour` per visitor), `RUN_RATE_GLOBAL` (`600/hour`), `RUN_RATE_GLOBAL_DAY`
+  (`2000/day`), `PROJECT_RATE` (`30/hour`), `PROJECT_RATE_GLOBAL` (`200/hour`), `PROJECT_RATE_GLOBAL_DAY`
+  (`500/day`). Reading pages and trial history is never capped. Set hard limits on the platforms too: a prepaid Token Factory balance with auto top-up
   off, Tavily's free tier or pay-as-you-go off, and Railway's usage limit.
 - The defaults (Nemotron 3 Super in `us-central1`, JSON mode, thinking off) are the tested ones. Optional settings
   are listed in `.env.example`. To use Claude instead, set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=<key>`.
@@ -76,7 +79,7 @@ shows `"database": true` and `"US100": false`, because there's no data yet.
 brew install railway          # Railway's command-line tool
 railway login                 # opens the browser
 railway link                  # pick the project and the app service
-railway volume files upload data/bars /bars
+railway volume files upload data/bars /bars    # add --overwrite to replace files already there
 railway redeploy              # so start.sh builds the demo project
 ```
 

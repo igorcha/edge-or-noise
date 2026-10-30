@@ -25,6 +25,7 @@ from django.db import DatabaseError, connection, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.exceptions import APIException, NotFound, ParseError, ValidationError
+from rest_framework.permissions import SAFE_METHODS
 from rest_framework.response import Response
 from rest_framework.throttling import BaseThrottle, SimpleRateThrottle
 from rest_framework.views import APIView
@@ -81,9 +82,10 @@ def trial_json(t: Trial) -> dict:
 
 
 # --- spend caps -----------------------------------------------------------------------------------
-# Parse and research spend model tokens (and search credits) on the app's own keys. Three caps: one visitor
-# (<scope>), everyone together per hour (<scope>_global) and per day (<scope>_global_day), so total spend has a
-# ceiling however many IPs call.
+# What costs the app something: parse and research spend model tokens (and search credits) on its own keys; a
+# trial run or the exam takes about a second of CPU and stores its trade log; a project is a database row.
+# Three caps on each: one visitor (<scope>), everyone together per hour (<scope>_global) and per day
+# (<scope>_global_day), so the total has a ceiling however many IPs call. Reads (GET) are never capped.
 
 class _Bucket(SimpleRateThrottle):
     """One rate-limited counter, checked and recorded separately."""
@@ -110,6 +112,8 @@ class SpendThrottle(BaseThrottle):
     lock = threading.Lock()
 
     def allow_request(self, request, view):
+        if request.method in SAFE_METHODS:  # trial history, project pages: free to read
+            return True
         scope = view.throttle_scope
         buckets = [_Bucket(scope, self.get_ident(request)), _Bucket(f"{scope}_global", "all"),
                    _Bucket(f"{scope}_global_day", "all")]
@@ -171,6 +175,9 @@ class Demo(APIView):
 
 
 class Projects(APIView):
+    throttle_classes = SPEND_THROTTLES  # a database row each
+    throttle_scope = "project"
+
     def post(self, request):
         data = request.data if isinstance(request.data, dict) else {}
         instrument, timeframe = check_instrument(data.get("instrument", "US100")), data.get("timeframe", "5m")
@@ -188,6 +195,9 @@ class ProjectDetail(APIView):
 
 
 class ProjectTrials(APIView):
+    throttle_classes = SPEND_THROTTLES  # a run: CPU, and a trade log stored (GET, the history, isn't capped)
+    throttle_scope = "run"
+
     def get(self, request, pk):
         p = get_object_or_404(Project, pk=pk)
         return Response([trial_summary(t) for t in p.trials.all()])
@@ -338,6 +348,9 @@ class BarsWindow(APIView):
 
 
 class Exam(APIView):
+    throttle_classes = SPEND_THROTTLES  # a run on the holdout, counted with trial runs
+    throttle_scope = "run"
+
     def post(self, request, pk):
         data = request.data if isinstance(request.data, dict) else {}
         with transaction.atomic():

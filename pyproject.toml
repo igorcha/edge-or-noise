@@ -12,6 +12,7 @@ dependencies = [
     "numba>=0.61",
     "openai>=1.50",  # Nemotron on Nebius Token Factory (OpenAI-compatible API)
     "anthropic>=0.70",  # Claude, the swappable alternative (LLM_PROVIDER=anthropic)
+    "tzdata",  # New York time in slim containers, which ship no system timezone database
 ]
 
 [project.optional-dependencies]
