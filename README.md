@@ -7,6 +7,8 @@ or just noise.
 **Live:** https://edge-or-noise-production.up.railway.app — no signup. Click **See a finished project** for the
 demo, or describe your own strategy.
 
+**Video Demo:** https://youtu.be/_SN2In4zpCg
+
 Built for the Nebius x NVIDIA Global AI Hackathon. The language model is **NVIDIA Nemotron 3 Super on Nebius
 Token Factory**, and web search is **Tavily**, Nebius's agentic search API.
 
