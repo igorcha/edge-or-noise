@@ -162,6 +162,15 @@ def test_cross_then_block_step_with_geometry():
     assert s.steps["up"].tolist() == [3] and s.bar.tolist() == [5] and s.geometry["gap.top"][0] == 101
 
 
+def test_a_stop_at_the_signal_candle_works_for_a_cross():
+    # close crosses above 102 at bar 4: candle (99.8, 103, 99.8, 102.8); stop 0.5 under its low
+    cross = {"name": "up", "event": {"left": {"price": "close"}, "op": "crosses_above", "right": 102}}
+    s = run(setup=[cross], entry={"type": "market"},
+            stop={"type": "level", "at": {"ref": "up.candle_low"}, "buffer_pts": 0.5})
+    assert s.bar.tolist() == [4] and s.stop_price.tolist() == [99.3]
+    s = run(stop={"type": "level", "at": {"ref": "low.candle_low"}})  # an earlier step's candle: bar 2's low
+    assert s.stop_price.tolist() == [98.5]
+
 # --- dropping what can't be traded --------------------------------------------------------------
 
 def test_atr_stop_unknown_is_dropped():
@@ -206,10 +215,18 @@ def test_examples_run(bars, name):
                               "stop not beyond entry", "target not beyond entry"}
 
 
-@pytest.mark.parametrize("name", sorted(EXAMPLES))
+# A cross with its stop at the signal candle's low: a candle price read at the step's bar.
+CANDLE_STOP = {**EXAMPLES[sorted(EXAMPLES)[0]], "filters": [],
+               "setup": [{"name": "up", "event": {"left": {"block": "ema", "params": {"length": 9}}, "op": "crosses_above",
+                                                  "right": {"block": "ema", "params": {"length": 21}}}}],
+               "entry": {"type": "market"}, "stop": {"type": "level", "at": {"ref": "up.candle_low"}, "buffer_pts": 1},
+               "target": {"type": "r_multiple", "r": 2}}
+
+
+@pytest.mark.parametrize("name", [*sorted(EXAMPLES), "candle_stop"])
 def test_examples_truncation(bars, name):
     """Signals found on bars[:t+1] are exactly the full-data signals at bars <= t."""
-    spec = validate_spec({**EXAMPLES[name], "timeframe": "5m"})
+    spec = validate_spec({**(CANDLE_STOP if name == "candle_stop" else EXAMPLES[name]), "timeframe": "5m"})
     full = interpret(spec, bars)
     rng = np.random.default_rng(zlib.crc32(name.encode()))
     # signal and step bars too: a signal stamped or priced a bar early shows exactly when cut there

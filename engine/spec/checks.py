@@ -20,7 +20,7 @@ from engine.blocks.types import EVENT, LEVEL, SERIES
 from engine.data.instruments import TIMEFRAMES
 from engine.spec.models import (
     CROSS_OPS, All, AnyOf, BlockRef, Compare, Condition, Entry, Event, LevelStop, LevelTarget, LimitEntry, Not,
-    Price, PriceRef, Stop, StepRef, Strategy, Target,
+    CANDLE_PRICES, Price, PriceRef, Stop, StepRef, Strategy, Target,
 )
 
 PRICE_KINDS = frozenset({LEVEL})  # what an entry, stop or target can sit at
@@ -172,9 +172,12 @@ def _price(p: PriceRef, step_blocks: dict[str, BlockSpec | None], path: str, tf:
         return _block(p, PRICE_KINDS, path, tf)[0]
     if p.step not in step_blocks:
         raise SpecError(f"{path}.ref", f"no setup step named {p.step!r}, steps are {sorted(step_blocks)}")
+    if p.output in CANDLE_PRICES:  # the step's own candle: every step has one
+        return p
     block = step_blocks[p.step]
     if block is None:
-        raise SpecError(f"{path}.ref", f"step {p.step!r} is a cross, it has no prices to refer to")
+        raise SpecError(f"{path}.ref", f"step {p.step!r} is a cross: its only prices are its candle's "
+                                       f"({', '.join(CANDLE_PRICES)})")
     kind = block.outputs.get(p.output)
     if kind is None:
         raise SpecError(f"{path}.ref", f"step {p.step!r} ({block.name}) has no output {p.output!r}, "

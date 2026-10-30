@@ -28,7 +28,10 @@ def _dataset(exam: bool) -> Dataset:
 
 
 @pytest.fixture(autouse=True)
-def synthetic_data(monkeypatch, settings):
+def synthetic_data(monkeypatch, settings, tmp_path):
+    (tmp_path / "bars" / "US100").mkdir(parents=True)  # the one market with "data": its manifest exists
+    (tmp_path / "bars" / "US100" / "manifest.json").write_text("{}")
+    monkeypatch.setenv("BACKTESTER_DATA_DIR", str(tmp_path))
     dev, exam = _dataset(False), _dataset(True)
     monkeypatch.setattr(services, "dataset", lambda instrument, timeframe: dev)
     monkeypatch.setattr(services, "exam_dataset", lambda instrument, timeframe: exam)
@@ -55,15 +58,20 @@ def spec_without_fixed_fields():
 
 @pytest.mark.django_db
 @pytest.mark.django_db
-def test_health_reports_the_database_and_which_instruments_have_data(client, monkeypatch, tmp_path):
-    (tmp_path / "bars" / "US100").mkdir(parents=True)
-    (tmp_path / "bars" / "US100" / "manifest.json").write_text("{}")
-    monkeypatch.setenv("BACKTESTER_DATA_DIR", str(tmp_path))
-    r = client.get("/api/health")
+def test_health_reports_the_database_and_which_instruments_have_data(client):
+    r = client.get("/api/health")  # the fixture's data folder has US100 only
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] and body["database"] and body["data"]["US100"] is True
     assert not any(v for k, v in body["data"].items() if k != "US100")
+
+
+@pytest.mark.django_db
+def test_markets_are_the_instruments_with_price_data(client):
+    assert client.get("/api/catalog").json()["markets"] == [{"name": "US100", "title": "Nasdaq 100"}]
+    r = client.post("/api/projects", {"name": "x", "instrument": "BTCUSD", "timeframe": "5m"}, format="json")
+    assert r.status_code == 400 and "no price data" in str(r.json()["instrument"])
+    assert client.post("/api/projects", {"instrument": "DOGE", "timeframe": "5m"}, format="json").status_code == 400
 
 
 def test_database_url_is_read_like_railway_writes_it():
@@ -281,6 +289,100 @@ def test_parse_input_and_model_failures(client, project, use_llm, monkeypatch):
     monkeypatch.setattr(services, "llm", no_key)
     r = client.post(url, {"prompt": "FVG"}, format="json")
     assert r.status_code == 503 and "NEBIUS" not in r.json()["error"]  # configuration details stay in the log
+
+
+@pytest.mark.django_db
+def test_research_finds_a_strategy_for_the_prompt_box(client, use_llm, monkeypatch):
+    from engine.llm.research import Result, SearchError, SearchNotConfigured
+
+    class FakeSearch:
+        def search(self, query):
+            return [Result("Silver Bullet", "https://example.com/sb", "An FVG between 10 AM and 11 AM, 2R.")]
+    monkeypatch.setattr(services, "make_search", FakeSearch)
+    rules = ("Long. Between 10:00 and 11:00 NY, after a sweep of the Asia low, a bullish FVG forms within 1 hour. "
+             "Market order at the next candle's open. Stop 1 point below the sweep's low. Target 2R.")
+    use_llm({"summary": "The ICT Silver Bullet.", "strategy": rules, "choices": ["Stop 1 point below the sweep's low.",
+                                                                                 "Within 1 hour."],
+             "left_out": ["The short side."], "sources": [1]},
+            # the parser check: the rules parse without questions
+            _reply(spec_without_fixed_fields()))
+    r = client.post("/api/research", {"question": "the most famous ICT strategy?", "timeframe": "15m"}, format="json")
+    assert r.status_code == 200, r.content
+    body = r.json()
+    assert body["strategy"] == rules and body["sources"] == [{"title": "Silver Bullet", "url": "https://example.com/sb"}]
+    assert body["calls"] == 1 and body["choices"][0].startswith("Stop") and body["left_out"] == ["The short side."]
+    # the parse the check made is the new project's start: ready, for the timeframe asked, no raw model text
+    assert body["parses"] is True and body["parsed"]["status"] == "ready"
+    assert body["parsed"]["spec"]["timeframe"] == "15m" and set(body["parsed"]["attempts"][0]) == {"error", "seconds", "tokens"}
+    assert client.post("/api/research", {"question": "x", "timeframe": "4h"}, format="json").status_code == 400
+    assert client.post("/api/research", {"question": " "}, format="json").status_code == 400
+    assert client.post("/api/research", {"question": "x" * 501}, format="json").status_code == 400
+
+    def fails(exc):
+        def make():
+            raise exc
+        return make
+    monkeypatch.setattr(services, "make_search", fails(SearchNotConfigured("TAVILY_API_KEY is not set")))
+    r = client.post("/api/research", {"question": "silver bullet"}, format="json")
+    assert r.status_code == 503 and "TAVILY" not in r.json()["error"]
+    monkeypatch.setattr(services, "make_search", fails(SearchError("timeout")))
+    assert client.post("/api/research", {"question": "silver bullet"}, format="json").status_code == 502
+    assert "research" in client.get("/api/catalog").json()  # the UI offers it only when a key is set
+
+
+@pytest.mark.django_db
+def test_the_global_cap_counts_every_visitor_together(client, use_llm, monkeypatch):
+    from django.core.cache import cache
+    from rest_framework.throttling import SimpleRateThrottle
+
+    from engine.llm.research import Result
+
+    class FakeSearch:
+        def search(self, query):
+            return [Result("Silver Bullet", "https://example.com/sb", "An FVG between 10 AM and 11 AM, 2R.")]
+    monkeypatch.setattr(services, "make_search", FakeSearch)
+    found = {"summary": "The ICT Silver Bullet.", "strategy": "", "choices": [], "left_out": [], "sources": [1]}
+    monkeypatch.setattr(services, "llm", lambda: ScriptedLLM(found, found, found))
+    monkeypatch.setitem(SimpleRateThrottle.THROTTLE_RATES, "research_global", "2/hour")  # the dict get_rate reads
+    cache.clear()
+    try:
+        for ip in ("10.0.0.1", "10.0.0.2"):
+            assert client.post("/api/research", {"question": "silver bullet"}, format="json",
+                               REMOTE_ADDR=ip).status_code == 200
+        r = client.post("/api/research", {"question": "silver bullet"}, format="json", REMOTE_ADDR="10.0.0.3")
+        assert r.status_code == 429, r.content  # a third visitor is refused: the cap is shared, not per IP
+    finally:
+        cache.clear()
+
+
+@pytest.mark.django_db
+def test_a_visitor_refused_per_ip_does_not_use_up_the_shared_cap(client, use_llm, monkeypatch):
+    # DRF runs every throttle even after one refuses, and each records what it allows: refused requests from one
+    # IP must not fill the global bucket, or one script locks everyone out without spending anything
+    from django.core.cache import cache
+    from rest_framework.throttling import SimpleRateThrottle
+
+    from engine.llm.research import Result
+
+    class FakeSearch:
+        def search(self, query):
+            return [Result("Silver Bullet", "https://example.com/sb", "An FVG between 10 AM and 11 AM, 2R.")]
+    monkeypatch.setattr(services, "make_search", FakeSearch)
+    found = {"summary": "The ICT Silver Bullet.", "strategy": "", "choices": [], "left_out": [], "sources": [1]}
+    monkeypatch.setattr(services, "llm", lambda: ScriptedLLM(found))
+    monkeypatch.setitem(SimpleRateThrottle.THROTTLE_RATES, "research", "2/hour")
+    monkeypatch.setitem(SimpleRateThrottle.THROTTLE_RATES, "research_global", "5/hour")
+    cache.clear()
+    try:
+        codes = [client.post("/api/research", {"question": "x"}, format="json", REMOTE_ADDR="10.0.0.9").status_code
+                 for _ in range(10)]
+        assert codes == [200, 200] + [429] * 8
+        refused = client.post("/api/research", {"question": "x"}, format="json", REMOTE_ADDR="10.0.0.9")
+        assert 0 < int(refused.headers["Retry-After"]) <= 3600  # when this visitor may try again
+        r = client.post("/api/research", {"question": "x"}, format="json", REMOTE_ADDR="10.0.0.10")
+        assert r.status_code == 200, "2 real searches of 5 were spent: another visitor still gets one"
+    finally:
+        cache.clear()
 
 
 @pytest.mark.django_db

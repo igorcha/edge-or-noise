@@ -28,7 +28,7 @@ from engine.data.instruments import TIMEFRAMES
 from engine.spec.checks import canonicalize
 from engine.spec.models import (
     CROSS_OPS, All, AnyOf, AtrStop, BlockRef, Compare, Condition, Event, LevelStop, LevelTarget, LimitEntry, Not, Price,
-    PointsStop, PriceRef, RTarget, StepRef, Strategy,
+    CANDLE_PRICES, PointsStop, PriceRef, RTarget, StepRef, Strategy,
 )
 
 
@@ -89,6 +89,8 @@ def interpret(spec: Strategy, bars: Bars) -> Signals:
                 for out, kind in resolve(s.event.block).outputs.items() if kind == LEVEL}
 
     def price(ref: PriceRef) -> np.ndarray:
+        if isinstance(ref, StepRef) and ref.output in CANDLE_PRICES:  # that step's candle, closed by the signal
+            return getattr(bars, CANDLE_PRICES[ref.output])[steps[ref.step]]
         if isinstance(ref, StepRef):
             return ev.output(_step_block(spec, ref.step), ref.output)[steps[ref.step]]
         return ev.array(ref)[signal]

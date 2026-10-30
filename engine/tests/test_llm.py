@@ -41,6 +41,8 @@ def envelope(spec=None, assumptions=(), questions=(), unsupported=()):
 FVG = strip(FVG_LONG)
 SWEEP = {**FVG, "setup": FVG["setup"][:1], "entry": {"type": "market"},  # one step: no wait to ask about
          "stop": {"type": "level", "at": {"ref": "sweep.extreme"}}}
+FVG_SPEC_FILTERS = [{"event": {"block": "time_window", "inputs": {}, "output": "value",
+                                "params": {"end": None, "session": "ny_am", "start": None}}}]
 WAIT = ("How many bars can each step of your setup (sweep, then gap) wait for the one before it? On 5m bars, 1 hour "
         "is 12 bars (at most 500).")
 PROMPT = "NY AM, sweep of the Asia low then a bullish FVG within 10 candles, limit at the gap top, stop under the swing low, 2R."
@@ -242,6 +244,52 @@ def test_a_stop_at_a_swing_event_is_the_price_of_that_swing():
     r = parse(words, "US100", "5m", llm)
     assert r.status == READY and len(llm.sent) == 1
     assert r.spec["stop"]["at"] == {"ref": "hl.low"} and r.spec["stop"]["buffer_pts"] == 2
+    for written in ("hl", "hl.candle_low"):  # the bare step, or the candle that confirmed it: still the higher low
+        hl["stop"]["at"] = {"ref": written}
+        assert parse(words, "US100", "5m", Scripted(envelope(hl))).spec["stop"]["at"] == {"ref": "hl.low"}
+    candle = words.replace("stop 2 points under it", "stop 2 points under its candle")  # said: the candle it is
+    assert parse(candle, "US100", "5m", Scripted(envelope(hl))).spec["stop"]["at"] == {"ref": "hl.candle_low"}
+
+
+def test_a_setup_step_without_an_output_is_its_blocks_one_event():
+    no_output = copy.deepcopy(FVG)
+    for step in no_output["setup"]:
+        step["event"].pop("output")
+    llm = Scripted(envelope(no_output))
+    r = parse(PROMPT, "US100", "5m", llm)
+    assert r.status == READY and len(llm.sent) == 1 and r.spec == expected_spec(FVG, "5m")
+    swing = copy.deepcopy(FVG)
+    swing["setup"][1]["event"] = {"block": "swing"}  # four event outputs: which one is the trader's, not ours
+    assert parse(PROMPT, "US100", "5m", Scripted(envelope(swing), envelope(swing))).status == INVALID
+
+
+def test_a_wait_on_the_first_setup_step_is_dropped():
+    first = copy.deepcopy(FVG)
+    first["setup"][0]["within"] = 12  # nothing before it to wait for
+    llm = Scripted(envelope(first))
+    assert parse(PROMPT, "US100", "5m", llm).spec == expected_spec(FVG, "5m") and len(llm.sent) == 1
+
+
+def test_a_bar_price_as_a_stop_level_is_the_signal_candle():
+    # "stop 1 point below the low of the signal candle": Nemotron wrote the stop at {"price": "low"}
+    candle = copy.deepcopy(FVG)
+    candle["stop"] = {"type": "level", "at": {"price": "low"}, "buffer_pts": 1}
+    llm = Scripted(envelope(candle))
+    r = parse(PROMPT, "US100", "5m", llm)
+    assert r.status == READY and len(llm.sent) == 1 and r.spec["stop"]["at"] == {"ref": "gap.candle_low"}
+
+
+def test_times_without_a_session_are_a_custom_window():
+    # "between 08:30 and 11:00": Nemotron leaves out "session": "custom" every time
+    custom = copy.deepcopy(FVG)
+    custom["filters"] = [{"event": {"block": "time_window", "params": {"start": "09:30", "end": "11:00"}}}]
+    llm = Scripted(envelope(custom))
+    r = parse(PROMPT, "US100", "5m", llm)
+    assert r.status == READY and len(llm.sent) == 1
+    assert r.spec["filters"][0]["event"]["params"] == {"session": "custom", "start": "09:30", "end": "11:00"}
+    named = copy.deepcopy(FVG)  # exactly the NY AM killzone's times: the named session
+    named["filters"] = [{"event": {"block": "time_window", "params": {"session": "custom", "start": "08:30", "end": "11:00"}}}]
+    assert parse(PROMPT, "US100", "5m", Scripted(envelope(named))).spec["filters"] == FVG_SPEC_FILTERS
 
 
 def test_conditions_written_on_a_setup_step_move_to_the_filters():

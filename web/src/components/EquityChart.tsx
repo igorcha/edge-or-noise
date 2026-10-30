@@ -36,7 +36,7 @@ export function EquityChart({ trial, selected, onPick }: { trial: Trial; selecte
       .setData(p50.map((v, i) => ({ time: x(i), value: v })))
     let eq = 0
     const equity = chart.addSeries(LineSeries, {
-      color: t.accent, lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
+      color: t.accent, lineWidth: 3, priceLineVisible: false, lastValueVisible: true,
       crosshairMarkerRadius: 4, crosshairMarkerBackgroundColor: t.accent,
     })
     equity.setData(trial.trades.map((tr, i) => ({ time: x(i), value: (eq += tr.R) })))

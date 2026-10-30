@@ -1,8 +1,11 @@
 // Per-browser conveniences only: which projects this browser made, and how a new one should start.
 // Everything that matters (trials, the counter, the exam) lives on the server.
 
-export type Recent = { id: number; name: string; timeframe: string; at: string }
-export type Start = { example?: string; prompt?: string }
+export type Recent = { id: number; name: string; instrument?: string; timeframe: string; at: string }  // instrument: older entries are US100
+import type { ParseResult } from '../api/types'
+
+/** How a new project starts: an example, a prompt, or a prompt already parsed (rules found on the web). */
+export type Start = { example?: string; prompt?: string; parsed?: ParseResult }
 
 function read<T>(key: string, fallback: T, storage: () => Storage = () => localStorage): T {
   try {

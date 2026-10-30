@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from engine.spec.card import render_card
 from engine.spec import SpecError, Strategy, canonical_dict, canonical_json, json_schema, spec_hash, validate_spec
 from engine.spec import hashing
 from engine.spec.examples import DISPLACEMENT_SHORT, EMA_CROSS_LONG, EXAMPLES, FVG_LONG, OPENING_RANGE_LONG
@@ -193,6 +194,11 @@ def test_cross_errors(path, value, where, words):
     with pytest.raises(SpecError) as e:
         validate_spec(edited(EMA_CROSS_LONG, path, value))
     assert (e.value.path, words in e.value.message) == (where, True)
+
+
+def test_a_cross_step_has_its_candle_prices():
+    spec = validate_spec(edited(EMA_CROSS_LONG, "stop", {"type": "level", "at": {"ref": "cross.candle_low"}, "buffer_pts": 1}))
+    assert render_card(spec)["sections"]["stop"].startswith("1 point below the low of the signal candle")
 
 
 # --- prices vs numbers ------------------------------------------------------------------------------

@@ -26,6 +26,8 @@ from dataclasses import asdict, dataclass, field
 from pydantic import BaseModel
 
 from engine.blocks.registry import UNSUPPORTED, resolve
+from engine.blocks.timing import SESSIONS
+from engine.blocks.types import EVENT
 from engine.llm.client import LLM
 from engine.llm.prompt import ENVELOPE_SCHEMA, messages
 from engine.spec import SpecError, Strategy, canonical_dict, validate_spec
@@ -109,6 +111,8 @@ NAMED = [
 # dropped the stop's buffer, so the parser points it there itself.
 SWING_PRICE = {"new_high": "high", "higher_high": "high", "lower_high": "high",
                "new_low": "low", "higher_low": "low", "lower_low": "low"}
+# A step's candle is only the trader's when they say so: "below the higher low" is the swing, not its candle.
+CANDLE_WORDS = re.compile(r"\bcandle|\bbar\b|\bwick", re.I)
 
 # How long a later setup step may wait for the one before it changes the trade count by orders of magnitude, and
 # Nemotron fills an unstated one with anything from 1 to 500 bars ("after the sweep, wait for a higher low"). With
@@ -223,7 +227,13 @@ def keep_to_the_traders_words(spec: dict, assumptions: list[str], words: str,
     # the model's reasons for what it filled in go with it
     said = [w for k in dropped for w in DECISIONS[k][1]]
     assumptions = [a for a in assumptions if not any(w in a.lower() for w in said)]
-    point_swing_refs_at_prices(spec)
+    point_swing_refs_at_prices(spec, words)
+    name_the_event_outputs(spec)
+    candle_prices_are_the_signal_candle(spec)
+    times_make_a_custom_window(spec)
+    steps = spec.get("setup")
+    if isinstance(steps, list) and steps and isinstance(steps[0], dict):
+        steps[0].pop("within", None)  # the first step has no step before it to wait for
     return spec, assumptions + lift_step_filters(spec)
 
 
@@ -245,21 +255,85 @@ def unstated_wait(spec: dict | None, words: str, timeframe: str) -> str | None:
     return WAIT_QUESTION.format(steps=", then ".join(names), tf=timeframe, per_hour=max(1, 60 // minutes))
 
 
-def point_swing_refs_at_prices(spec: dict) -> None:
-    """A ref to a swing step's event ("hl.higher_low") used as a price becomes that swing's price ("hl.low")."""
-    swings = set()
+# The blocks with a custom NY window, and the param that names it.
+WINDOW_PARAM = {"time_window": "session", "window_high_low": "window"}
+
+
+def times_make_a_custom_window(spec) -> None:
+    """"Between 08:30 and 11:00": Nemotron writes time_window {"start", "end"} without "session": "custom",
+    every time, and the retry doesn't always fix it. Times are the trader's own words, so they win: a named
+    session when they're exactly its times, otherwise a custom window."""
+    if isinstance(spec, list):
+        for x in spec:
+            times_make_a_custom_window(x)
+        return
+    if not isinstance(spec, dict):
+        return
+    key = WINDOW_PARAM.get(spec.get("block")) if isinstance(spec.get("block"), str) else None
+    params = spec.get("params")
+    if key and isinstance(params, dict) and params.get("start") and params.get("end"):
+        named = next((name for name, (a, b) in SESSIONS.items() if (a, b) == (params["start"], params["end"])), None)
+        if named:
+            spec["params"] = {k: v for k, v in params.items() if k not in ("start", "end")} | {key: named}
+        else:
+            params[key] = "custom"
+    for v in spec.values():
+        times_make_a_custom_window(v)
+
+
+def candle_prices_are_the_signal_candle(spec: dict) -> None:
+    """"Stop below the low of the signal candle": Nemotron writes the stop at {"price": "low"}, a condition's
+    bar price. As an entry, stop or target level it can only mean the signal candle's, the last step's."""
+    steps = spec.get("setup")
+    last = steps[-1].get("name") if isinstance(steps, list) and steps and isinstance(steps[-1], dict) else None
+    if not isinstance(last, str):
+        return
+    for key in ("entry", "stop", "target"):
+        part = spec.get(key)
+        at = part.get("at") if isinstance(part, dict) else None
+        if isinstance(at, dict) and set(at) == {"price"} and at["price"] in ("open", "high", "low", "close"):
+            part["at"] = {"ref": f"{last}.candle_{at['price']}"}
+
+
+def name_the_event_outputs(spec: dict) -> None:
+    """A setup step is an event. Its block written without "output" ("sweep") means the block's one event
+    output when it has exactly one (sweep "value", fvg "formed"). Nemotron leaves it out, then fails the
+    retry; with several event outputs (swing) it stays a validation error."""
+    for step in spec.get("setup") or []:
+        ev = step.get("event") if isinstance(step, dict) else None
+        if not isinstance(ev, dict) or ev.get("output") or not isinstance(ev.get("block"), str):
+            continue
+        try:
+            outputs = resolve(ev["block"]).outputs
+        except KeyError:
+            continue
+        events = [k for k, kind in outputs.items() if kind == EVENT]
+        if len(outputs) > 1 and len(events) == 1:
+            ev["output"] = events[0]
+
+
+def point_swing_refs_at_prices(spec: dict, words: str = "") -> None:
+    """A swing step used as a price means that swing's price ("hl.low"), however Nemotron writes it: its event
+    ("hl.higher_low"), the bare step ("hl"), or, when the trader never said "candle" or "bar", the candle that
+    confirmed it ("hl.candle_low": bars after the swing, not the higher low)."""
+    swings = {}  # step name -> the swing's event output
     for step in spec.get("setup") or []:
         try:
             if resolve(step["event"]["block"]).name == "swing":
-                swings.add(step["name"])
+                swings[step["name"]] = step["event"].get("output")
         except (KeyError, TypeError, AttributeError):
             pass
+    said_candle = bool(CANDLE_WORDS.search(words))
 
     def walk(x):
         if isinstance(x, dict):
-            step, _, out = str(x.get("ref", "")).partition(".")
+            step, dot, out = str(x.get("ref", "")).partition(".")
             if step in swings and out in SWING_PRICE:
                 x["ref"] = f"{step}.{SWING_PRICE[out]}"
+            elif step in swings and not dot and swings[step] in SWING_PRICE:
+                x["ref"] = f"{step}.{SWING_PRICE[swings[step]]}"
+            elif step in swings and out in ("candle_low", "candle_high") and not said_candle:
+                x["ref"] = f"{step}.{out.removeprefix('candle_')}"
             for v in x.values():
                 walk(v)
         elif isinstance(x, list):

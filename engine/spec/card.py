@@ -9,7 +9,7 @@ from engine.blocks.timing import SESSIONS
 from engine.spec.checks import canonicalize
 from engine.spec.models import (
     All, AnyOf, AtrStop, BlockRef, Compare, Condition, Event, LevelStop, LevelTarget, LimitEntry, Not, PointsStop,
-    Price, PriceRef, RTarget, StepRef, Strategy,
+    CANDLE_PRICES, Price, PriceRef, RTarget, StepRef, Strategy,
 )
 
 SESSION_NAMES = {"asia": "Asia", "london": "London", "ny_am": "NY AM", "ny_pm": "NY PM"}
@@ -19,7 +19,7 @@ TF_NAMES = {"1m": "1-minute", "5m": "5-minute", "15m": "15-minute"}
 
 def render_card(spec: Strategy) -> dict:
     spec = canonicalize(spec)
-    steps = {s.name: s.event for s in spec.setup if isinstance(s.event, BlockRef)}  # a cross has no prices
+    steps = {s.name: s.event for s in spec.setup}  # in order: the last one is the signal
     sections = {
         "direction": f"{_cap(spec.direction)} {spec.instrument} on {TF_NAMES.get(spec.timeframe, spec.timeframe)} bars.",
         "filters": _filters(spec),
@@ -49,6 +49,10 @@ def _window(p: dict) -> str:
     if w == "custom":
         return f"{p['start']}-{p['end']} NY range"
     return f"{SESSION_NAMES[w]} session"
+
+
+def _pts(v: float) -> str:
+    return f"{v:g} point" + ("" if v == 1 else "s")
 
 
 def describe(ref: BlockRef, output: str | None = None) -> str:
@@ -131,7 +135,11 @@ def _wrap(c: Condition) -> str:
     return f"({text})" if isinstance(c, (All, AnyOf)) else text
 
 
-def _price(ref: PriceRef, steps: dict[str, BlockRef]) -> str:
+def _price(ref: PriceRef, steps: dict) -> str:
+    if isinstance(ref, StepRef) and ref.output in CANDLE_PRICES:
+        names = list(steps)
+        candle = "the signal candle" if ref.step == names[-1] else f"the candle of setup step {names.index(ref.step) + 1}"
+        return f"the {CANDLE_PRICES[ref.output]} of {candle}"
     if isinstance(ref, StepRef):
         return describe(steps[ref.step], ref.output)
     return describe(ref)
@@ -162,7 +170,7 @@ def _entry(spec: Strategy, steps) -> str:
     if isinstance(e, LimitEntry):
         where = _price(e.at, steps)
         if e.offset_pts:
-            where = f"{abs(e.offset_pts):g} points {'above' if e.offset_pts > 0 else 'below'} {where}"
+            where = f"{_pts(abs(e.offset_pts))} {'above' if e.offset_pts > 0 else 'below'} {where}"
         return f"Limit order at {where}; cancelled if not filled within {e.expiry_bars} bars."
     return "Market order at the open of the next bar."
 
@@ -171,12 +179,12 @@ def _stop(spec: Strategy, steps) -> str:
     s = spec.stop
     if isinstance(s, LevelStop):
         side = "below" if spec.direction == "long" else "above"
-        prefix = f"{s.buffer_pts:g} points {side} " if s.buffer_pts else "At "
+        prefix = f"{_pts(s.buffer_pts)} {side} " if s.buffer_pts else "At "
         return f"{prefix}{_price(s.at, steps)}."
     if isinstance(s, AtrStop):
         return f"{s.multiple:g} x ATR({s.length}) from the entry."
     assert isinstance(s, PointsStop)
-    return f"{s.points:g} points from the entry."
+    return f"{_pts(s.points)} from the entry."
 
 
 def _target(spec: Strategy, steps) -> str:
@@ -192,5 +200,5 @@ def _limits(spec: Strategy) -> str:
     parts = [f"At most {n} trade{'s' if n != 1 else ''} per trading day, one position at a time"]
     if spec.limits.max_bars_held:
         parts.append(f"exit after {spec.limits.max_bars_held} bars if still open")
-    parts.append(f"{spec.slippage_pts:g} points slippage per side")
+    parts.append(f"{_pts(spec.slippage_pts)} slippage per side")
     return "; ".join(parts) + "."

@@ -12,7 +12,7 @@ export function TopBar({ project, trials }: { project: Project; trials: TrialSum
       <span className="topbar-sep" />
       <div className="topbar-project">
         <span className="topbar-name">{project.name}</span>
-        <span className="faint">US100 · {project.timeframe}</span>
+        <span className="faint">{project.instrument} · {project.timeframe}</span>
         {project.is_demo && <Badge tone="accent">Demo</Badge>}
       </div>
       <div className="topbar-right">

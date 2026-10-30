@@ -47,8 +47,14 @@ class BlockRef(SpecModel):
     output: Name | None = None
 
 
+# The candle a setup step fired on, for any step (a cross too): "stop below the signal candle's low" is the
+# last step's candle_low. Known when that candle closes, which is at or before the signal.
+CANDLE_PRICES = {"candle_open": "open", "candle_high": "high", "candle_low": "low", "candle_close": "close"}
+
+
 class StepRef(SpecModel):
-    """A price from the setup's own geometry: `<step name>.<level output>`, e.g. "gap.top".
+    """A price from the setup's own geometry: `<step name>.<level output>`, e.g. "gap.top", or the
+    candle the step fired on: `<step name>.candle_low` (CANDLE_PRICES).
 
     It's the output as it was on the bar that step fired, so an entry "at gap.top" doesn't
     drift to a newer gap.

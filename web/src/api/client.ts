@@ -1,5 +1,5 @@
 import type {
-  BarsWindow, Catalog, ParseResult, Preview, Project, RunResult, Spec, Trial, TrialSummary,
+  BarsWindow, Catalog, ParseResult, Preview, Project, Research, RunResult, Spec, Trial, TrialSummary,
 } from './types'
 
 /** An API error, with the spec path when the engine's validator pointed at a field. */
@@ -57,6 +57,8 @@ export const api = {
     request<ParseResult>('POST', `/projects/${id}/parse`, { prompt, answers }),
   exam: (id: number, trial?: number) =>
     request<Trial & { project: Project }>('POST', `/projects/${id}/exam`, trial ? { trial } : {}),
+  research: (question: string, instrument: string, timeframe: string) =>
+    request<Research>('POST', '/research', { question, instrument, timeframe }),
   bars: (trial: number, trade: number, before = 60, after = 20) =>
     request<BarsWindow>('GET', `/bars?trial=${trial}&trade=${trade}&before=${before}&after=${after}`),
 }

@@ -63,7 +63,7 @@ def run_kernel(signals: Signals, bars: Bars, m1: Bars, costs: Costs, spread: np.
     """
     start, end = ranges if ranges is not None else m1_ranges(bars, m1)
     if spread is None:
-        spread = costs.spread_per_bar(m1.open_minute_ny)
+        spread = costs.spread_per_bar(m1.open_minute_ny, m1.open)
     return kernel.scan(
         signals.bar.astype(np.int64), signals.entry_price, signals.stop_price, signals.stop_distance,
         signals.target_price, float(signals.target_r), int(signals.direction), signals.entry_kind == "limit",

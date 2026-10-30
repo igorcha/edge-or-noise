@@ -1,7 +1,11 @@
 #!/bin/sh
 # What the container runs on every start: database tables, the demo project, then the web server.
 set -e
-cd "$(dirname "$0")/../api"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Where the price data lives. The Dockerfile sets /data (the Railway volume); run outside Docker, it's the
+# repo's data/, the same default as engine/data/io.py.
+export BACKTESTER_DATA_DIR="${BACKTESTER_DATA_DIR:-$ROOT/data}"
+cd "$ROOT/api"
 
 if [ -z "$DJANGO_SECRET_KEY" ]; then
   echo "DJANGO_SECRET_KEY is not set. Add it to the service's variables (see DEPLOY.md)." >&2

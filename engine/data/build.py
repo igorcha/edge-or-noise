@@ -21,7 +21,6 @@ from engine.data.instruments import DATA_END, DATA_START, INSTRUMENTS, TIMEFRAME
 from engine.data.sessions import minute_of_day_ny, trading_day, trading_day_start
 
 OHLC = ["open", "high", "low", "close"]
-BREAK_NY = (16 * 60 + 15, 18 * 60)  # daily halt, [16:15, 18:00) NY by bar open time
 
 
 class DataError(ValueError):
@@ -40,7 +39,9 @@ def read_raw(raw_dir: Path, start: pd.Timestamp, end: pd.Timestamp) -> tuple[pd.
     return sides[0], sides[1]
 
 
-def validate_raw(bid: pd.DataFrame, ask: pd.DataFrame) -> None:
+def validate_raw(bid: pd.DataFrame, ask: pd.DataFrame, inst: Instrument | None = None) -> None:
+    """Refuse raw data the engine can't trust. `inst` brings the instrument's daily break (US100's
+    16:15-18:00 NY halt), in which no bar may open; crypto has none."""
     problems = []
     for name, d in (("bid", bid), ("ask", ask)):
         if d.empty:
@@ -60,10 +61,13 @@ def validate_raw(bid: pd.DataFrame, ask: pd.DataFrame) -> None:
         problems.append("bid and ask timestamps differ")
     elif ((ask.open < bid.open) | (ask.close < bid.close)).any():
         problems.append("ask below bid")
-    m = minute_of_day_ny(bid.index)
-    in_break = (m >= BREAK_NY[0]) & (m < BREAK_NY[1])
-    if in_break.any():
-        problems.append(f"{int(in_break.sum())} bars inside the 16:15-18:00 NY break")
+    brk = inst.daily_break if inst else None
+    if brk:
+        m = minute_of_day_ny(bid.index)
+        lo, hi = (t.hour * 60 + t.minute for t in brk)
+        in_break = (m >= lo) & (m < hi)
+        if in_break.any():
+            problems.append(f"{int(in_break.sum())} bars inside the {brk[0]:%H:%M}-{brk[1]:%H:%M} NY break")
     if problems:
         raise DataError("; ".join(problems))
 
@@ -109,13 +113,20 @@ def spread_schedule(bid: pd.DataFrame, ask: pd.DataFrame, inst: Instrument, mont
     def up(x: float) -> float:
         return round(math.ceil(x / inst.price_step - 1e-6) * inst.price_step, 6)
 
-    return {
+    out = {
         "rth": up(spread[rth].mean()),
         "overnight": up(spread[~rth].mean()),
         "rth_window_ny": [inst.rth[0].strftime("%H:%M"), inst.rth[1].strftime("%H:%M")],
         "derived_from": [start.isoformat(), end.isoformat()],
         "stat": "mean ask-bid at bar close, rounded up to price step",
+        "unit": inst.spread_unit,
     }
+    if inst.spread_unit == "relative":  # what's charged: the same means as a share of the bid, rounded up to 0.1bp
+        rel = spread / bid.close[sel]
+        out["rth_relative"] = math.ceil(rel[rth].mean() * 1e5 - 1e-9) / 1e5
+        out["overnight_relative"] = math.ceil(rel[~rth].mean() * 1e5 - 1e-9) / 1e5
+        out["stat_relative"] = "mean (ask-bid)/bid at bar close, rounded up to 0.1 basis point; charged times the price"
+    return out
 
 
 def holdout_start_day(days: pd.DatetimeIndex, fraction: float = 0.2, min_months: int = 6) -> pd.Timestamp:
@@ -141,7 +152,7 @@ def build(instrument: str, raw_root: Path, bars_root: Path, *, start: pd.Timesta
           end: pd.Timestamp = DATA_END, holdout_fraction: float = 0.2, holdout_min_months: int = 6) -> dict:
     inst = INSTRUMENTS[instrument]
     bid, ask = read_raw(raw_root / instrument, start, end)
-    validate_raw(bid, ask)
+    validate_raw(bid, ask, inst)
 
     bars_1m = to_close_time(bid[OHLC])
     days = trading_day(bars_1m.index).unique()

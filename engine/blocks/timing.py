@@ -88,7 +88,7 @@ def time_window(bars: Bars, p: TimeWindowParams) -> dict:
     return {"value": in_window(bars.open_minute_ny, start, end)}
 
 
-Weekday = Literal["mon", "tue", "wed", "thu", "fri"]
+Weekday = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]  # weekends only exist for crypto
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 

@@ -21,14 +21,16 @@ type Props = {
   running: boolean
   runError: string | null
   initialPrompt: string | null
+  initialParsed: ParseResult | null  // rules found on the web, already parsed when they were checked
 }
 
-export function RulesPanel({ project, draft, onEdit, onRun, onView, running, runError, initialPrompt }: Props) {
+export function RulesPanel({ project, draft, onEdit, onRun, onView, running, runError, initialPrompt, initialParsed }: Props) {
   const locked = project.exam_used || project.is_demo
   return (
     <div className="rules-panel">
       <div className="rules-scroll">
-        {!locked && <PromptBox project={project} onSpec={onEdit} initialPrompt={initialPrompt} hasRules={!!draft.spec} />}
+        {!locked && <PromptBox project={project} onSpec={onEdit} initialPrompt={initialPrompt} initialParsed={initialParsed}
+          hasRules={!!draft.spec} />}
         {draft.spec ? (
           <>
             <RulesCard draft={draft} />
@@ -127,8 +129,8 @@ function RunBar({ project, draft, running, runError, onRun, onView }: {
 
 // --- describing the strategy -----------------------------------------------------------------------------
 
-function PromptBox({ project, onSpec, initialPrompt, hasRules }: {
-  project: Project; onSpec: (s: Spec) => void; initialPrompt: string | null; hasRules: boolean
+function PromptBox({ project, onSpec, initialPrompt, initialParsed, hasRules }: {
+  project: Project; onSpec: (s: Spec) => void; initialPrompt: string | null; initialParsed: ParseResult | null; hasRules: boolean
 }) {
   const [prompt, setPrompt] = useState(initialPrompt ?? '')
   const [answers, setAnswers] = useState<Record<string, string>>({})
@@ -157,7 +159,13 @@ function PromptBox({ project, onSpec, initialPrompt, hasRules }: {
   useEffect(() => {  // a project started from the home page's prompt parses it right away
     if (initialPrompt && !autoRan.current) {
       autoRan.current = true
-      parse(false)
+      if (initialParsed?.status === 'ready' && initialParsed.spec) {
+        // found on the web and parsed when it was checked: start from exactly that, not a second, different read
+        setResult(initialParsed)
+        onSpec(initialParsed.spec)
+      } else {
+        parse(false)
+      }
     }
   }, [])  // oxlint-disable-line react-hooks/exhaustive-deps -- once, for the prompt the project started with
 

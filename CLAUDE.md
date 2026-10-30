@@ -23,12 +23,13 @@ The trade log is the contract. Everything downstream only reads it.
 - `web/`: Vite + React + TypeScript, Lightweight Charts v5. API types are generated with drf-spectacular → openapi-typescript.
 - **Deploy:** one Docker image on Railway (`Dockerfile`, `deploy/start.sh`, guide in `DEPLOY.md`): Gunicorn runs Django, which serves `/api` and, through WhiteNoise, the React build. Railway Postgres; the bars on a volume at `/data`. The model is Nemotron on Nebius Token Factory, which is the hackathon's Nebius requirement.
 
-**Data:** Dukascopy 1m bid and ask CFD bars for US100, US500, JP225 and XAUUSD.
+**Data:** Dukascopy 1m bid and ask CFD bars. Built: US100, US500, BTCUSD and ETHUSD (the home page's market picker lists the instruments with a manifest). Configured but not fetched: JP225, XAUUSD.
 - `data/raw/<INST>/{bid,ask}/YYYY-MM.parquet`: as downloaded, indexed by bar **open** time. Never modified, and the engine never reads it.
 - `scripts/build_bars.py` validates raw and writes `data/bars/<INST>/{1m,5m,15m}.parquet` (bid OHLC only, indexed by **bar close time** in UTC) plus `manifest.json` (holdout boundary, spread schedule, file hashes). 2m and 1h come later.
 - **The MVP dataset is frozen:** Jan 1 2020 to Oct 23 2026 (`DATA_END` in `engine/data/instruments.py`). Don't refetch, because new data would move the holdout boundary.
 - Read bars only through `engine.data.io.load_bars`. It cuts the holdout unless `include_holdout=True`, which only the final exam passes.
-- US100 trades 18:00–16:15 NY. The daily break is 16:15–18:00, so the 17:00 roll falls inside it.
+- US100 and US500 trade 18:00–16:15 NY. The daily break is 16:15–18:00, so the 17:00 roll falls inside it. The build refuses bars inside an instrument's `daily_break` (`engine/data/instruments.py`).
+- BTCUSD and ETHUSD trade around the clock, weekends included (`daily_break=None`). Their trading day still rolls at 17:00 NY, so Saturday and Sunday are trading days of their own, and the RTH spread window is just the NY stock session.
 - Dukascopy volume isn't exchange volume, so there are no volume-based tools.
 
 ## Building blocks
@@ -72,6 +73,7 @@ It supports:
 - comparisons (`>`, `<`, `>=`, `<=`) and crosses (`crosses_above`, `crosses_below`), prices with prices and numbers with numbers. A cross is an event, so it can be a setup step.
 - "A then B within N bars"
 - persistent state ("since")
+- the candle a setup step fired on (`<step>.candle_low`, any step including a cross): "stop below the signal candle"
 - references to setup geometry (`gap.top`)
 - entry expiry
 - multi-timeframe evaluation, joined on close time
@@ -95,6 +97,7 @@ It supports:
 - Costs: run on bid candles and add the spread on the buy side.
   - Spread is a fixed schedule per instrument, with one value for RTH (9:30–16:00 NY) and one for overnight. Each value is the mean ask − bid over the last 6 months of the dataset, stored in the manifest and applied to all history so dev and holdout are charged the same.
   - Per-bar ask − bid is not used: Dukascopy's quoted spread changed regime during 2020–2026 and never widens on news.
+  - Crypto (BTCUSD, ETHUSD) is charged the same 6-month means as a share of price (`spread_unit="relative"`, `rth_relative`/`overnight_relative` in the manifest), times each 1m bar's open: BTC went from $4k to $126k, so fixed points would charge 2020 trades ten times more of the price than recent ones. US100 and US500 stay in points.
   - Slippage is user-set in the UI (default 0). Commission comes from the instrument config.
 
 **Output and implementation:**
@@ -140,6 +143,14 @@ It supports:
 - Validate the output and retry once with the validator error.
 - Settings, tested Oct 29: `nvidia/nemotron-3-super-120b-a12b`, `json_object` mode, thinking off. The golden eval scored 12/12 in three runs in a row, at about 1s per parse; with the two swing-structure cases added it scores 14/14 in most runs (one miss in seven runs of a case was the model asking a question of its own). `json_schema` scored 10/12 (it picked a direction instead of asking), and thinking on scored 9/12 at about 9s. Temperature 0 isn't deterministic on Token Factory, so judge a prompt change on several eval runs.
 
+**Finding a strategy (`engine/llm/research.py`, `POST /api/research`):**
+- For traders new to writing rules: Tavily searches the web, and Nemotron writes the strategy as complete rules in the backtester's own terms, so it runs without follow-up questions.
+- Gaps the results leave are filled with fixed house defaults (`DEFAULTS`: limit at the FVG edge with a 12-candle expiry, stop 1 point below the sweep's low, 2R, steps within 1 hour), each one listed under "Our choices" before the trader uses the rules. The parser itself still never invents a decision.
+- Checks before the trader sees it, up to 3 write-ups: every number appears in the results, the question or the choices (a house-default number the model didn't list gets listed for it); one direction; the real parser reads the rules, and its questions and untestable concepts go back to the model. Untestable parts (order blocks, the short side) are listed under "Left out".
+- The final rules are always parsed. When that parse is ready, the new project starts from it (no second parse that could read the text differently); an edit to the rules or a different timeframe parses again.
+- Sources are Tavily's results, picked by number; the model never writes a URL. Nothing runs until the trader clicks "Run as trial 1": it's a normal, counted trial.
+- Configured by `TAVILY_API_KEY`; without it the UI hides it. Throttled per IP (`RESEARCH_RATE`) and for everyone together (`RESEARCH_RATE_GLOBAL`, `RESEARCH_RATE_GLOBAL_DAY`), like parse: the global caps are the ceiling on the bill.
+
 **Rules card and edits:**
 - Rules card text is rendered server-side from the spec with templates. The LLM never writes it.
 - Chat edits become a JSON patch against the current spec. The diff becomes the trial's summary line.
@@ -154,7 +165,7 @@ It supports:
   - a missing direction, setup, entry, stop or target always becomes a question, never a default
   - the engine, not the model, lists the defaults it filled in
   - a keyword check catches unsupported concepts the model dropped
-  - checks against the trader's own words, because Nemotron does all of these: an entry, stop or target the trader never stated is dropped and asked; ticks/pips are always asked; both directions are asked; a multi-step setup with no time given ("then a higher low") asks how many bars each step may wait; a session, weekday or session level (Asia/London/prior day/week high or low) the trader named but the spec lacks is sent back once, then flagged; filters written on a setup step move to the top level; a price ref to a swing event (`hl.higher_low`) becomes the swing's level (`hl.low`)
+  - checks against the trader's own words, because Nemotron does all of these: an entry, stop or target the trader never stated is dropped and asked; ticks/pips are always asked; both directions are asked; a multi-step setup with no time given ("then a higher low") asks how many bars each step may wait; a session, weekday or session level (Asia/London/prior day/week high or low) the trader named but the spec lacks is sent back once, then flagged; filters written on a setup step move to the top level; a swing step used as a price (`hl.higher_low`, `hl`, or `hl.candle_low` when the trader never said "candle") becomes the swing's level (`hl.low`); a bar price as an entry/stop/target level (`{"price": "low"}`) becomes the signal candle's (`<last step>.candle_low`); `start`/`end` times without `session: custom` become a custom window (or the named killzone with exactly those times)
 - `client.py` is the Nemotron client. It's configured by `NEBIUS_*` env vars or a gitignored `.env`.
 
 **Coach:**

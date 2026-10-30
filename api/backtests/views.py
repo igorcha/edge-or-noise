@@ -1,7 +1,7 @@
 """The REST API. Runs are synchronous: a trial with its baseline takes a few seconds.
 
     GET  /api/health                       up, database reachable, which instruments have price data
-    GET  /api/catalog                      block catalog, spec schema, examples
+    GET  /api/catalog                      block catalog, spec schema, examples, markets with price data
     GET  /api/demo                         the shared read-only demo project (manage.py seed_demo)
     POST /api/projects                     {name, instrument, timeframe}
     GET  /api/projects/{id}
@@ -12,9 +12,13 @@
     GET  /api/trials/{id}                  everything, trade log included
     GET  /api/bars?trial=&trade=&before=&after=   strategy bars around one trade (dev data only)
     POST /api/projects/{id}/exam           {trial?} one-time final exam on the holdout; locks the project
+    POST /api/research                     {question, instrument?, timeframe?} -> a strategy found on the web (Tavily + Nemotron),
+                                           as rules for the prompt box: summary, rules, the defaults it chose,
+                                           what it left out, sources
 """
 
 import logging
+import threading
 
 from django.conf import settings
 from django.db import DatabaseError, connection, transaction
@@ -22,7 +26,7 @@ from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.exceptions import APIException, NotFound, ParseError, ValidationError
 from rest_framework.response import Response
-from rest_framework.throttling import ScopedRateThrottle
+from rest_framework.throttling import BaseThrottle, SimpleRateThrottle
 from rest_framework.views import APIView
 from rest_framework.views import exception_handler as drf_exception_handler
 
@@ -32,6 +36,7 @@ from engine.blocks import catalog
 from engine.data import io
 from engine.data.instruments import INSTRUMENTS, TIMEFRAMES
 from engine.llm import LLMError, LLMNotConfigured
+from engine.llm.research import SearchError, SearchNotConfigured, search_configured
 from engine.spec import SpecError, json_schema, validate_spec
 from engine.spec.examples import EXAMPLES
 
@@ -75,6 +80,53 @@ def trial_json(t: Trial) -> dict:
     }
 
 
+# --- spend caps -----------------------------------------------------------------------------------
+# Parse and research spend model tokens (and search credits) on the app's own keys. Three caps: one visitor
+# (<scope>), everyone together per hour (<scope>_global) and per day (<scope>_global_day), so total spend has a
+# ceiling however many IPs call.
+
+class _Bucket(SimpleRateThrottle):
+    """One rate-limited counter, checked and recorded separately."""
+
+    def __init__(self, scope: str, key: str):
+        self.scope = scope
+        super().__init__()  # reads the rate for `scope` from DEFAULT_THROTTLE_RATES
+        self.key = f"throttle_{scope}_{key}"
+
+    def full(self) -> bool:
+        self.history, self.now = self.cache.get(self.key, []), self.timer()
+        while self.history and self.history[-1] <= self.now - self.duration:
+            self.history.pop()
+        return len(self.history) >= self.num_requests
+
+
+class SpendThrottle(BaseThrottle):
+    """All three caps as one throttle: a request counts against them only when every one allows it.
+
+    Separate DRF throttle classes don't work for this: DRF runs every class even after one refuses, and each
+    records the requests it allows, so a visitor already refused per IP would keep filling the shared buckets
+    and lock everyone else out without spending anything. Counters live in the process cache (one Gunicorn
+    process): a redeploy resets them, and the lock makes check-and-record exact across its threads."""
+    lock = threading.Lock()
+
+    def allow_request(self, request, view):
+        scope = view.throttle_scope
+        buckets = [_Bucket(scope, self.get_ident(request)), _Bucket(f"{scope}_global", "all"),
+                   _Bucket(f"{scope}_global_day", "all")]
+        with self.lock:
+            self.refused = [b for b in buckets if b.full()]
+            if self.refused:
+                return False
+            for b in buckets:
+                b.throttle_success()  # record it in all three
+        return True
+
+    def wait(self):
+        return max((b.wait() for b in self.refused), default=None)
+
+
+SPEND_THROTTLES = [SpendThrottle]
+
 # --- views --------------------------------------------------------------------------------------
 
 class Health(APIView):
@@ -90,10 +142,24 @@ class Health(APIView):
         return Response({"ok": True, "database": True, "data": data})
 
 
+def has_data(instrument: str) -> bool:
+    return (io.bars_dir(instrument) / "manifest.json").is_file()
+
+
+def check_instrument(instrument) -> str:
+    if instrument not in INSTRUMENTS:
+        raise ValidationError({"instrument": f"unknown, choose from {sorted(INSTRUMENTS)}"})
+    if not has_data(instrument):
+        raise ValidationError({"instrument": f"no price data for {instrument} here yet"})
+    return instrument
+
+
 class Catalog(APIView):
     def get(self, request):
+        markets = [{"name": i.name, "title": i.title} for i in INSTRUMENTS.values() if has_data(i.name)]
         return Response({"catalog": catalog(), "spec_schema": json_schema(), "examples": EXAMPLES,
-                         "instruments": sorted(INSTRUMENTS), "timeframes": sorted(TIMEFRAMES, key=TIMEFRAMES.get)})
+                         "instruments": sorted(INSTRUMENTS), "timeframes": sorted(TIMEFRAMES, key=TIMEFRAMES.get),
+                         "markets": markets, "research": search_configured()})
 
 
 class Demo(APIView):
@@ -107,9 +173,7 @@ class Demo(APIView):
 class Projects(APIView):
     def post(self, request):
         data = request.data if isinstance(request.data, dict) else {}
-        instrument, timeframe = data.get("instrument", "US100"), data.get("timeframe", "5m")
-        if instrument not in INSTRUMENTS:
-            raise ValidationError({"instrument": f"unknown, choose from {sorted(INSTRUMENTS)}"})
+        instrument, timeframe = check_instrument(data.get("instrument", "US100")), data.get("timeframe", "5m")
         if timeframe not in TIMEFRAMES:
             raise ValidationError({"timeframe": f"unknown, choose from {sorted(TIMEFRAMES)}"})
         ds = services.dataset(instrument, timeframe)
@@ -186,7 +250,7 @@ MAX_PROMPT = 4000
 
 
 class Parse(APIView):
-    throttle_classes = [ScopedRateThrottle]  # every call spends model tokens on our key
+    throttle_classes = SPEND_THROTTLES  # every call spends model tokens on our key
     throttle_scope = "parse"
 
     def post(self, request, pk):
@@ -213,6 +277,40 @@ class Parse(APIView):
                             status=502)
         log.info("project %s parse: %s after %s call(s)", p.id, result["status"], len(result["attempts"]))
         return Response(result)
+
+
+MAX_QUESTION = 500
+
+
+class Research(APIView):
+    """Find a strategy on the web. It only returns text for the prompt box: nothing is parsed or run."""
+    throttle_classes = SPEND_THROTTLES  # every call spends search credits and model tokens
+    throttle_scope = "research"
+
+    def post(self, request):
+        data = request.data if isinstance(request.data, dict) else {}
+        question = data.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise ValidationError({"question": "ask about a strategy"})
+        if len(question) > MAX_QUESTION:
+            raise ValidationError({"question": f"keep it under {MAX_QUESTION} characters"})
+        instrument, timeframe = check_instrument(data.get("instrument", "US100")), data.get("timeframe", "5m")
+        if timeframe not in TIMEFRAMES:
+            raise ValidationError({"timeframe": f"one of {', '.join(TIMEFRAMES)}"})
+        try:
+            r = services.research(question.strip(), instrument, timeframe)
+        except (SearchNotConfigured, LLMNotConfigured) as e:
+            log.error("research unavailable: %s", e)
+            return Response({"error": "web search isn't configured here"}, status=503)
+        except SearchError as e:
+            log.warning("research search failed: %s", e)
+            return Response({"error": "the web search didn't answer; try again"}, status=502)
+        except LLMError as e:
+            log.warning("research model failed: %s", e)
+            return Response({"error": "the language model didn't answer; try again"}, status=502)
+        log.info("research: %s source(s), %s call(s), search %.1fs, model %.1fs", len(r.sources), r.calls,
+                 r.search_seconds, r.model_seconds)
+        return Response(r.to_json())
 
 
 class TrialDetail(APIView):

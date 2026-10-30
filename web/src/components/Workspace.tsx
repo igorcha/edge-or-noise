@@ -63,7 +63,7 @@ export function Workspace({ projectId }: { projectId: number }) {
   useEffect(() => {
     // oxlint-disable-next-line react/set-state-in-effect -- state is set after the fetch resolves, not synchronously
     refresh().then(async ({ p, ts }) => {
-      rememberProject({ id: p.id, name: p.name, timeframe: p.timeframe })
+      rememberProject({ id: p.id, name: p.name, instrument: p.instrument, timeframe: p.timeframe })
       const latest = ts.at(-1)
       if (latest) {
         const t = await api.trial(latest.id)
@@ -107,7 +107,7 @@ export function Workspace({ projectId }: { projectId: number }) {
       <aside className="panel">
         <RulesPanel project={project} draft={draft} onEdit={edit} running={running} runError={runError}
           onRun={run} onView={(n) => { const t = trials.find((x) => x.number === n && x.stage === 'development'); if (t) selectTrial(t.id) }}
-          initialPrompt={start?.prompt ?? null} />
+          initialPrompt={start?.prompt ?? null} initialParsed={start?.parsed ?? null} />
       </aside>
       <main className="main">
         <Results project={project} trials={trials} selected={selected} onSelect={selectTrial}

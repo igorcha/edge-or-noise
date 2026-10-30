@@ -10,6 +10,8 @@ from engine.honest import Dataset, baseline, cost_stress, load_dev, load_exam, r
 from engine.honest.trial import Trial as EngineTrial
 from engine.llm import LLM, READY, make_llm
 from engine.llm import parse as llm_parse
+from engine.llm.research import Research, make_search, parser_check
+from engine.llm.research import research as llm_research
 from engine.spec import Strategy, canonical_dict, spec_hash, validate_spec
 from engine.spec.card import render_card
 
@@ -26,6 +28,16 @@ def exam_dataset(instrument: str, timeframe: str) -> Dataset:
 @lru_cache(maxsize=1)
 def llm() -> LLM:
     return make_llm()  # raises LLMNotConfigured without a key; not cached then, so a key added later works
+
+
+def research(question: str, instrument: str, timeframe: str) -> Research:
+    """A strategy from the web, checked against the parser on the timeframe the trader picked."""
+    model = llm()
+    r = llm_research(question, instrument, model, make_search(), timeframe,
+                     check=parser_check(model, instrument, timeframe))
+    if r.parsed:  # what the new project starts from: no raw model text to the client, as in `parse`
+        r.parsed["attempts"] = [{k: a[k] for k in ("error", "seconds", "tokens")} for a in r.parsed["attempts"]]
+    return r
 
 
 def parse(prompt: str, instrument: str, timeframe: str, answers: list[dict], known: dict[str, int],

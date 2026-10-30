@@ -44,6 +44,10 @@ The spec:
   A setup step is only {"name", "event", "within"}: a session, day or trend condition goes in "filters".
 - A price from the setup's own geometry is {"ref": "<step name>.<output>"}, like "gap.top" or
   "sweep.extreme" (the sweep candle's extreme). A block level is the block itself, like the last swing low.
+  Only when the trader says "candle" or "bar": the candle a step fired on is {"ref": "<step name>.candle_low"}
+  (candle_high, candle_open, candle_close), for any step, a cross too; "the signal candle" is the last step's.
+  A swing step's own price ("below the higher low") is its level, "<step name>.low", not its candle.
+  {"price": ...} is only for conditions.
 - A comparison is {"left": ..., "op": ..., "right": ...} with op one of > < >= <= crosses_above crosses_below.
   A bar price is {"price": "close"} (or open/high/low). A cross is an event, so it can be a setup step:
   "a candle closes above X" is {"left": {"price": "close"}, "op": "crosses_above", "right": X}.

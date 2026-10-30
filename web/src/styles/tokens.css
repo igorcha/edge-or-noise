@@ -1,28 +1,34 @@
 /* Design tokens. Dark only. Colour carries meaning (verdict, win/loss, the one accent for actions);
-   everything else is neutral, so the numbers are what you see first. */
+   everything else is neutral, so the numbers are what you see first. The meaning colours are vivid on
+   purpose: the verdict and the actions should be the first things the eye lands on. */
 :root {
   --bg: #0a0c10;
   --surface: #10131a;
   --surface-2: #151922;
   --surface-3: #1b202b;
-  --border: #212733;
-  --border-strong: #2d3443;
+  --border: #232a37;
+  --border-strong: #333c4e;
 
   --text: #e6e9ef;
-  --text-2: #a1a9b7;
-  --text-3: #6c7585;
+  --text-2: #b3bbc9;
+  --text-3: #7d8696;
 
-  --accent: #7aa2f7;
-  --accent-hover: #93b4fa;
-  --accent-bg: rgb(122 162 247 / 0.12);
+  --accent: #6b9bff;
+  --accent-hover: #8db2ff;
+  --accent-bg: rgb(107 155 255 / 0.14);
+  --accent-line: rgb(107 155 255 / 0.4);
+  --accent-glow: 0 6px 22px -6px rgb(107 155 255 / 0.55);
   --on-accent: #0a0c10;
 
-  --pos: #4cb69a;
-  --pos-bg: rgb(76 182 154 / 0.12);
-  --neg: #e2786d;
-  --neg-bg: rgb(226 120 109 / 0.12);
-  --warn: #d8a94f;
-  --warn-bg: rgb(216 169 79 / 0.12);
+  --pos: #3ddc97;
+  --pos-bg: rgb(61 220 151 / 0.13);
+  --pos-line: rgb(61 220 151 / 0.38);
+  --neg: #ff6b6b;
+  --neg-bg: rgb(255 107 107 / 0.13);
+  --neg-line: rgb(255 107 107 / 0.38);
+  --warn: #ffc145;
+  --warn-bg: rgb(255 193 69 / 0.13);
+  --warn-line: rgb(255 193 69 / 0.38);
 
   /* the baseline band and other "what luck does" visuals */
   --luck: #5b6475;

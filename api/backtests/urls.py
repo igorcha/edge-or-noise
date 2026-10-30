@@ -14,4 +14,5 @@ urlpatterns = [
     path("projects/<int:pk>/exam", views.Exam.as_view()),
     path("trials/<int:pk>", views.TrialDetail.as_view()),
     path("bars", views.BarsWindow.as_view()),
+    path("research", views.Research.as_view()),
 ]

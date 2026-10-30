@@ -69,7 +69,12 @@ def _bad_high(bid, ask):
 @pytest.mark.parametrize("corrupt", [_ask_below_bid, _duplicate, _bar_in_break, _misaligned, _bad_high])
 def test_validate_rejects(corrupt):
     with pytest.raises(DataError):
-        validate_raw(*corrupt(*synth_raw()))
+        validate_raw(*corrupt(*synth_raw()), INSTRUMENTS["US100"])
+
+
+def test_around_the_clock_instruments_have_no_break():
+    validate_raw(*_bar_in_break(*synth_raw()), INSTRUMENTS["BTCUSD"])  # crypto quotes through 16:15-18:00
+    assert INSTRUMENTS["US500"].daily_break == INSTRUMENTS["US100"].daily_break
 
 
 # --- close-time indexing and resampling ---------------------------------------
@@ -142,6 +147,15 @@ def test_spread_schedule_splits_rth_and_overnight():
     bid, ask = synth_raw()
     s = spread_schedule(bid, ask, INSTRUMENTS["US100"])
     assert (s["rth"], s["overnight"]) == (1.0, 1.5)
+    assert s["unit"] == "points" and "rth_relative" not in s
+
+
+def test_crypto_spread_schedule_is_also_a_share_of_price():
+    bid, ask = synth_raw()  # prices near 20,000; spread 1.0 RTH / 1.5 overnight
+    s = spread_schedule(bid, ask, INSTRUMENTS["BTCUSD"])
+    assert s["unit"] == "relative"
+    assert 5e-5 <= s["rth_relative"] <= 6e-5  # 1 point at ~20,000 = 0.5bp, rounded up to the next 0.1bp
+    assert s["overnight_relative"] > s["rth_relative"]
 
 
 # --- build + loader: the holdout is sealed by default ---------------------------------

@@ -155,6 +155,20 @@ export type Catalog = {
   examples: Record<string, Spec>
   instruments: string[]
   timeframes: string[]
+  research: boolean  // web search is configured (TAVILY_API_KEY)
+  markets: { name: string; title: string }[]  // instruments with price data, in display order
+}
+
+/** A strategy found on the web (POST /api/research): rules for the prompt box, never run directly. */
+export type Research = {
+  name: string  // the strategy's name, for the new project
+  summary: string
+  strategy: string
+  choices: string[]  // the house defaults it filled gaps with
+  left_out: string[]
+  sources: { title: string; url: string }[]
+  parses: boolean | null  // the parser read the rules without a question
+  parsed: ParseResult | null  // that parse: a new project starts from it instead of parsing again
 }
 
 export type ParseStatus = 'ready' | 'questions' | 'unsupported' | 'invalid'

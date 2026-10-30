@@ -1,7 +1,7 @@
 """Lookahead harness: every block, computed on bars[:t+1], must match its full-data values up to t.
 
 Cut points: random bars, both ends, and bars where an output fires or changes (where a
-"known too early" bug shows). Runs on real US100 dev bars when built, otherwise on synthetic bars.
+"known too early" bug shows). Runs on the real dev bars of every built instrument, otherwise on synthetic bars.
 """
 
 import zlib
@@ -12,6 +12,7 @@ import pytest
 from engine.blocks import REGISTRY, Bars, compute
 from engine.blocks.types import ZONE, Zones
 from engine.data import io
+from engine.data.instruments import INSTRUMENTS
 from engine.data.build import resample, to_close_time
 from engine.tests.test_data import synth_raw
 
@@ -57,13 +58,17 @@ SLICES = {"5m": ("2023-01-01", "2023-04-01"), "15m": ("2022-07-01", "2023-04-01"
 N_POINTS = 30
 
 
-@pytest.fixture(scope="module", params=sorted(SLICES))
+# Every instrument with built bars (crypto trades through weekends and the 16:15-18:00 break), else synthetic.
+BUILT = [i for i in sorted(INSTRUMENTS) if (io.bars_dir(i) / "manifest.json").exists()] or ["synthetic"]
+
+
+@pytest.fixture(scope="module", params=[(i, tf) for i in BUILT for tf in sorted(SLICES)], ids=lambda p: "-".join(p))
 def bars(request):
-    tf = request.param
-    if (io.bars_dir("US100") / "manifest.json").exists():
-        df = io.load_bars("US100", tf).loc[SLICES[tf][0]: SLICES[tf][1]]
-    else:
-        df = resample(to_close_time(synth_raw()[0]), int(tf[:-1]))
+    inst, tf = request.param
+    if inst != "synthetic":
+        df = io.load_bars(inst, tf).loc[SLICES[tf][0]: SLICES[tf][1]]
+        return Bars.from_frame(df, int(tf[:-1]), INSTRUMENTS[inst].price_step)
+    df = resample(to_close_time(synth_raw()[0]), int(tf[:-1]))
     return Bars.from_frame(df, int(tf[:-1]), 0.01)
 
 

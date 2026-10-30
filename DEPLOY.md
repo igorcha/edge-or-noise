@@ -41,12 +41,23 @@ DATABASE_URL=${{Postgres.DATABASE_URL}}
 PROXY_HOPS=1
 LLM_PROVIDER=nemotron
 NEBIUS_API_KEY=<your Token Factory key>
+TAVILY_API_KEY=<your Tavily key>
 ```
 
 - To generate the secret key: `python3 -c "import secrets; print(secrets.token_urlsafe(50))"`.
 - `${{Postgres.DATABASE_URL}}` is a reference: Railway fills in the database's address and password itself.
 - `PROXY_HOPS=1` tells Django that Railway's proxy sits in front of the app, so it reads each visitor's real
   address. Without it, the per-visitor parse limit would count all visitors together.
+- `TAVILY_API_KEY` turns on "Ask the web" on the home page (Tavily search, then Nemotron writes up what it
+  found). Without it the home page just doesn't offer it. `RESEARCH_RATE` (default `20/hour` per visitor) caps it.
+- Spend caps, all optional. Per visitor: `PARSE_RATE` (default `60/hour`) and `RESEARCH_RATE` (`20/hour`). For
+  everyone together, the ceiling on what the app can spend on your keys however many people (or bots) call:
+  `PARSE_RATE_GLOBAL` (`300/hour`), `PARSE_RATE_GLOBAL_DAY` (`1500/day`), `RESEARCH_RATE_GLOBAL` (`60/hour`),
+  `RESEARCH_RATE_GLOBAL_DAY` (`200/day`). At worst-case cost per call that's about $30 a day of Nemotron and
+  400 Tavily credits. The counters live in the app's memory: keep `WEB_CONCURRENCY` at 1 (the default), since each
+  extra Gunicorn worker would get caps of its own, and a redeploy starts them from zero. The day is a rolling 24
+  hours. Set hard limits on the platforms too: a prepaid Token Factory balance with auto top-up
+  off, Tavily's free tier or pay-as-you-go off, and Railway's usage limit.
 - The defaults (Nemotron 3 Super in `us-central1`, JSON mode, thinking off) are the tested ones. Optional settings
   are listed in `.env.example`. To use Claude instead, set `LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY=<key>`.
 
@@ -69,7 +80,8 @@ railway volume files upload data/bars /bars
 railway redeploy              # so start.sh builds the demo project
 ```
 
-Then `/api/health` should show `"US100": true`, and the home page should show "See a finished project".
+Then `/api/health` should show `true` for US100, US500, BTCUSD and ETHUSD, and the home page should show
+"See a finished project" and a market picker. The upload is about 300MB.
 
 **7. Health check (recommended).** Under Settings → Deploy → Healthcheck Path, enter `/api/health`. Railway then
 only switches traffic to a new version once it answers, so a broken push never replaces a working site.
@@ -77,11 +89,19 @@ only switches traffic to a new version once it answers, so a broken push never r
 ## After that
 
 - **Updating:** `git push` to `main` and Railway rebuilds and redeploys. The database and the price data are kept.
+- **Debug is off:** `DEBUG` is only on when `DJANGO_DEBUG=1`, so never add that variable on Railway. To check the
+  live site: `curl -s https://<name>.up.railway.app/api/nope | grep -c URLconf` prints `0` (with debug on, Django's
+  error page lists the URL patterns). Locally, `cd api && DJANGO_SECRET_KEY=x ../.venv/bin/python manage.py check
+  --deploy` runs Django's deployment checklist; the two warnings left are about forcing HTTPS, which is the
+  proxy's job here. Check that Railway does it: `curl -sI http://<name>.up.railway.app/` should answer with a
+  redirect to `https://`.
 - **Logs:** the app's box → Deployments → View logs. Each request shows the visitor's address, the request,
   the status and how long it took.
-- **Cost:** the app holds about 650MB of price data in memory and is idle most of the time, and Postgres is
-  small. Expect roughly $10 to $20 a month on the Hobby plan, which includes $5 of usage.
-- **Model spend:** each parse is one or two model calls. `PARSE_RATE` (default `60/hour` per visitor) caps it.
+- **Cost:** each market's price data is loaded into memory the first time someone uses it, about 400-550MB
+  per market, so roughly 2GB once all four are in use. The app is idle most of the time and Postgres is small.
+  Expect roughly $20 to $30 a month on the Hobby plan, which includes $5 of usage.
+- **Model spend:** each parse is one or two model calls, a web search up to nine. The per-visitor and global
+  caps above bound it; the global daily ones are the ceiling on the bill.
 
 ## Running the production setup locally
 

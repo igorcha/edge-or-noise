@@ -10,6 +10,12 @@
     BACKTESTER_DATA_DIR   where data/bars lives (engine.data.io)
     LLM_PROVIDER, NEBIUS_*, ANTHROPIC_*   the strategy parser's model (engine/llm/client.py)
     PARSE_RATE            parse calls per client IP, default 60/hour (each one spends model tokens)
+    TAVILY_API_KEY        web search for "find a strategy" (engine/llm/research.py); without it the UI hides it
+    RESEARCH_RATE         web searches per client IP, default 20/hour (search credits plus model tokens)
+    PARSE_RATE_GLOBAL, PARSE_RATE_GLOBAL_DAY, RESEARCH_RATE_GLOBAL, RESEARCH_RATE_GLOBAL_DAY
+                          the same for all visitors together, default 300/hour, 1500/day, 60/hour, 200/day:
+                          the ceiling on total spend (about $30/day of Nemotron and 400 Tavily credits at
+                          worst-case cost per call), however many IPs call. Counters reset on redeploy.
     PROXY_HOPS            proxies in front of the app (Railway: 1), so client IPs and https are read
                           from X-Forwarded-For/-Proto; 0 (default) trusts no forwarded headers
     WEB_DIST              the built frontend (default web/dist), served at / when it exists
@@ -38,13 +44,17 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",  # nosniff, Referrer-Policy and COOP headers
     "backtests.middleware.cors",
     "django.middleware.common.CommonMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",  # the app isn't meant to load inside other sites
 ]
+# No CSRF middleware: there are no logins, sessions or cookies, so there's nothing for a forged request to ride on.
+SILENCED_SYSTEM_CHECKS = ["security.W003"]
 
 WEB_DIST = Path(os.environ.get("WEB_DIST", ROOT_DIR / "web" / "dist"))
 if (WEB_DIST / "index.html").is_file():
-    MIDDLEWARE.insert(0, "whitenoise.middleware.WhiteNoiseMiddleware")
+    MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")  # right after SecurityMiddleware, per WhiteNoise
     WHITENOISE_ROOT = WEB_DIST
     WHITENOISE_INDEX_FILE = True  # "/" -> index.html
 
@@ -93,7 +103,15 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": ["rest_framework.permissions.AllowAny"],
     "UNAUTHENTICATED_USER": None,
     "EXCEPTION_HANDLER": "backtests.views.exception_handler",
-    "DEFAULT_THROTTLE_RATES": {"parse": os.environ.get("PARSE_RATE", "60/hour")},
+    "DEFAULT_THROTTLE_RATES": {
+        "parse": os.environ.get("PARSE_RATE", "60/hour"),  # per client IP
+        "research": os.environ.get("RESEARCH_RATE", "20/hour"),
+        # everyone together: the ceiling on what the app can spend on its keys (views.SpendThrottle)
+        "parse_global": os.environ.get("PARSE_RATE_GLOBAL", "300/hour"),
+        "parse_global_day": os.environ.get("PARSE_RATE_GLOBAL_DAY", "1500/day"),
+        "research_global": os.environ.get("RESEARCH_RATE_GLOBAL", "60/hour"),
+        "research_global_day": os.environ.get("RESEARCH_RATE_GLOBAL_DAY", "200/day"),
+    },
     "NUM_PROXIES": PROXY_HOPS or None,  # behind a proxy every request comes from the proxy's IP
 }
 

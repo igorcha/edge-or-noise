@@ -62,7 +62,7 @@ def baseline(trial: Trial, ds: Dataset, n_runs: int = N_RUNS, seed: int = 0) -> 
     else:  # a level target: use the R multiple it worked out to
         target_r = float(np.median(((trades["target"] - trades["entry"]) * trades["direction"]).to_numpy() / risks))
     costs = trial.costs  # same spread, commission and slippage as the strategy paid
-    spread = costs.spread_per_bar(m1.open_minute_ny)
+    spread = costs.spread_per_bar(m1.open_minute_ny, m1.open)
     ranges = m1_ranges(bars, m1)
     rng = np.random.default_rng(seed)
 

@@ -166,6 +166,16 @@ def test_scaled_costs_lower_r():
     assert r2 < r1
 
 
+def test_a_relative_spread_is_a_share_of_the_bar_price():
+    m1, tf = m1_bars(ROWS)  # entry at a bid open of 100
+    rel = Costs(spread_rth=0.003, spread_overnight=0.01, relative=True)  # 30bp in RTH: 0.3 points at 100
+    assert one(simulate(sig(stop_dist=2.0, target_r=2.0), tf, m1, rel)).cost_R == pytest.approx(0.3 / 2)
+    assert rel.scaled(1.5).relative and rel.scaled(1.5).spread_rth == pytest.approx(0.0045)
+    np.testing.assert_allclose(rel.spread_per_bar(np.array([600, 600]), np.array([100.0, 50_000.0])), [0.3, 150.0])
+    with pytest.raises(ValueError):
+        rel.spread_per_bar(np.array([600]))
+
+
 def test_overnight_spread_outside_rth():
     costs = Costs(spread_rth=0.3, spread_overnight=1.0)
     m1, tf = m1_bars([FLAT] * 15, start_ny="2026-03-10 03:00")
