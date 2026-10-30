@@ -74,7 +74,12 @@ export function Home() {
         <a className="card demo-link" href={`#/p/${demo.id}`}>
           <span>
             <span className="example-title">See a finished project</span>
-            <span className="muted"> · the FVG strategy, {demo.trial_count} trials and its final exam. Read-only, no signup.</span>
+            <span className="muted">
+              {demo.exam_used
+                ? ` · the FVG strategy: its best of ${demo.trial_count} trials looked positive. See what the sealed holdout said.`
+                : ` · the FVG strategy, ${demo.trial_count} trials.`}{' '}
+              Read-only, no signup.
+            </span>
           </span>
           <span className="demo-arrow" aria-hidden="true">→</span>
         </a>

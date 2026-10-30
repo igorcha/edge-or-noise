@@ -47,16 +47,18 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",  # nosniff, Referrer-Policy and COOP headers
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",  # the app isn't meant to load inside other sites
     "backtests.middleware.cors",
     "django.middleware.common.CommonMiddleware",
-    "django.middleware.clickjacking.XFrameOptionsMiddleware",  # the app isn't meant to load inside other sites
 ]
 # No CSRF middleware: there are no logins, sessions or cookies, so there's nothing for a forged request to ride on.
 SILENCED_SYSTEM_CHECKS = ["security.W003"]
 
 WEB_DIST = Path(os.environ.get("WEB_DIST", ROOT_DIR / "web" / "dist"))
 if (WEB_DIST / "index.html").is_file():
-    MIDDLEWARE.insert(1, "whitenoise.middleware.WhiteNoiseMiddleware")  # right after SecurityMiddleware, per WhiteNoise
+    # Below the two header middlewares: WhiteNoise answers without calling the ones after it, and the page
+    # needs X-Frame-Options more than the API does.
+    MIDDLEWARE.insert(2, "whitenoise.middleware.WhiteNoiseMiddleware")
     WHITENOISE_ROOT = WEB_DIST
     WHITENOISE_INDEX_FILE = True  # "/" -> index.html
 

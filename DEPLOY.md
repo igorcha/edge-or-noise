@@ -28,7 +28,8 @@ ends up in the image or on GitHub.
 
 **1. Create the project.** At [railway.com](https://railway.com), choose New Project → Deploy from GitHub repo →
 `edge-or-noise`. Railway finds the `Dockerfile` and starts building, which takes a few minutes the first time.
-This first deploy **will crash**: it has no secret key or database yet. That's expected.
+This first deploy can't start the app yet: it has no secret key or database. Railway may still show it online,
+but the Deploy Logs say `DJANGO_SECRET_KEY is not set`. That's expected.
 
 **2. Add the database.** In the project, choose + Create → Database → PostgreSQL. It appears as a second box named
 `Postgres`.
@@ -70,8 +71,9 @@ Attach volume), with mount path `/data`.
 **5. Give it a public address.** Go to Settings → Networking → Generate Domain. If Railway asks for a port, use
 the one in the deploy log line `Listening at: http://[::]:<port>`.
 
-Saving variables or a volume triggers a redeploy. The app now starts, and `https://<name>.up.railway.app/api/health`
-shows `"database": true` and `"US100": false`, because there's no data yet.
+Railway holds variable and volume changes until you click **Deploy** in the banner at the top. The app then
+starts, and `https://<name>.up.railway.app/api/health` shows `"database": true` and `"US100": false`, because
+there's no data yet.
 
 **6. Upload the price data**, once, from this repo on your Mac:
 
@@ -79,6 +81,7 @@ shows `"database": true` and `"US100": false`, because there's no data yet.
 brew install railway          # Railway's command-line tool
 railway login                 # opens the browser
 railway link                  # pick the project and the app service
+railway ssh keys add          # the upload goes over SSH: registers your ~/.ssh public key, once
 railway volume files upload data/bars /bars    # add --overwrite to replace files already there
 railway redeploy              # so start.sh builds the demo project
 ```

@@ -65,13 +65,21 @@ def spec_without_fixed_fields():
 
 
 @pytest.mark.django_db
-@pytest.mark.django_db
 def test_health_reports_the_database_and_which_instruments_have_data(client):
     r = client.get("/api/health")  # the fixture's data folder has US100 only
     assert r.status_code == 200
     body = r.json()
     assert body["ok"] and body["database"] and body["data"]["US100"] is True
     assert not any(v for k, v in body["data"].items() if k != "US100")
+
+
+@pytest.mark.django_db
+def test_the_page_and_the_api_refuse_to_load_inside_other_sites(client, settings):
+    if "whitenoise.middleware.WhiteNoiseMiddleware" not in settings.MIDDLEWARE:
+        pytest.skip("no web build: npm run build in web/")
+    for url in ("/", "/api/health"):
+        r = client.get(url)
+        assert r.status_code == 200 and r["X-Frame-Options"] == "DENY" and r["X-Content-Type-Options"] == "nosniff"
 
 
 @pytest.mark.django_db
